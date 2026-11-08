@@ -16,6 +16,10 @@ timeout_secs = 5
 prefix = "[Codex]"
 # 消息里是否带上 5h / 周额度（从 ~/.codex 的会话日志里读，只读不写）
 show_limits = true
+# 额度后面是否带「什么时候重置」
+show_reset = true
+# 额度口径："used" 显示已用百分比，"remaining" 显示剩余百分比
+limit_style = "used"
 # 末尾是否带 (turn N · thread XXXXXXXX) 会话标记
 show_footer = false
 

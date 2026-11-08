@@ -34,9 +34,16 @@ use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROC
 
 use crate::logfile::log;
 
-/// CREATE_NO_WINDOW：不给 cmd 创建控制台窗口。
-/// 不加的话，托盘在后台拉起一个 .bat 会闪一下黑框，白改 GUI 子系统了。
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// CREATE_NEW_CONSOLE：给 NapCat 一个自己的控制台窗口。
+///
+/// 这里**不能**用 CREATE_NO_WINDOW 把它藏起来。实测发现：剥掉控制台之后，
+/// 启动脚本里的 `reg query` 和 NapCat 引导器都会静默失败 ——
+/// 结果是 QQ 起来了，但 NapCat 模块根本没加载，3000 端口永远不通，
+/// 而且什么错都不报（连 NapCat 自己的 logs 目录都是空的）。
+///
+/// 控制台对 NapCat 不是装饰：二维码、登录状态、报错都打在上面。
+/// 所以托盘只负责「替你双击一下」，窗口照常出现，用完跟着 Job 一起关掉。
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 /// 由本程序启动的 NapCat。
 ///
@@ -44,6 +51,20 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// 这一步会连带结束整棵进程树（见模块文档）。
 pub struct Managed {
     job: HANDLE,
+}
+
+/// NapCat 把登录二维码写到 `<NapCat目录>/cache/qrcode.png`。
+///
+/// 为什么需要这个：控制台里的二维码是字符画，cmd 的字体和编码经常
+/// 渲染成乱码，根本扫不出来。而这张 PNG 是干净的 147×147 图片，
+/// 直接打开就能扫 —— 比纠结用哪个终端靠谱得多。
+///
+/// 路径从启动命令推导：`D:\tools\NapCat\launcher-user.bat`
+/// → `D:\tools\NapCat\cache\qrcode.png`
+pub fn qrcode_path(command: &[String]) -> Option<std::path::PathBuf> {
+    let launcher = command.first()?;
+    let dir = std::path::Path::new(launcher).parent()?;
+    Some(dir.join("cache").join("qrcode.png"))
 }
 
 // 句柄本身只是个整数，跨线程传递没问题
@@ -72,7 +93,11 @@ pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, 
     for arg in &command[1..] {
         cmd.arg(arg);
     }
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NEW_CONSOLE);
+
+    // 不重定向 stdout/stderr：让它占着自己的控制台，和手动双击脚本完全一致。
+    // 之前把输出倒进文件、顺便把 stdin 接到 null，结果 NapCat 引导器行为异常，
+    // 得不偿失。想看输出就直接看它自己的窗口。
 
     let child = cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
     let pid = child.id();

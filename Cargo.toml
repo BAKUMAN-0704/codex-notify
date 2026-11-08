@@ -1,6 +1,6 @@
 [package]
 name = "codex-notify"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Codex 的 notify 钩子：回合结束时把结果推到 QQ"
 
@@ -10,6 +10,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 解析 notify.toml
 toml = "0.8"
+# 托盘菜单改设置时要写回配置文件。
+# 用 toml_edit 而不是 toml：它保留原有注释和排版，
+# 用户手写的那些中文说明不会被覆盖掉。
+toml_edit = "0.22"
 # 极简的阻塞式 HTTP 客户端。
 # 关掉默认特性：本程序只访问本机 NapCat 的 http 接口，用不到 TLS，
 # 这样能省掉 rustls/ring 这一大坨依赖，编译更快、二进制更小。

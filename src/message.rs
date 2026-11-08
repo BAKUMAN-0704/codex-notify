@@ -32,6 +32,33 @@ impl Message {
     }
 }
 
+/// 拼一个额度片段，例如 `5h 已用 62%（18:20 重置）` 或 `5h 剩余 38%`。
+///
+/// `show_remaining` 决定口径；`show_reset` 由调用方在外面控制（这里只管值）。
+/// 百分比取整：手机上看到「62.3%」既占地方又没有额外信息。
+fn limit_segment(
+    label: &str,
+    used: f64,
+    resets_at: Option<i64>,
+    now: i64,
+    show_remaining: bool,
+) -> String {
+    let (word, value) = if show_remaining {
+        ("剩余", (100.0 - used).clamp(0.0, 100.0))
+    } else {
+        ("已用", used.clamp(0.0, 100.0))
+    };
+
+    let mut s = format!("{label} {word} {value:.0}%");
+
+    // 重置时间由调用方通过 resets_at 传入；这里不判断开关，
+    // 因为关掉 show_reset 时调用方根本不传 Some
+    if let Some(ts) = resets_at {
+        s.push_str(&format!("（{} 重置）", crate::clock::reset_label(ts, now)));
+    }
+    s
+}
+
 /// 把事件拼成通知。
 ///
 /// 最终形态（`show_footer = true` 时）：
@@ -58,10 +85,34 @@ pub fn compose(ev: &Event, cfg: &Config) -> Message {
     if cfg.show_limits {
         // 读不到额度就不写这一截，不要显示「额度未知」占位 —— 只会让消息变吵
         if let Some(l) = read_limits(&ev.thread_id) {
-            meta.push_str(&format!(
-                " · 5h 已用 {:.0}% · 周 已用 {:.0}%",
-                l.five_hour, l.weekly
-            ));
+            let now = crate::clock::now_unix();
+            // "used" 是默认；任何其他值都按 "remaining" 处理，
+            // 这样手写配置写错也不会突然什么都不显示
+            let show_remaining = cfg.limit_style.eq_ignore_ascii_case("remaining");
+
+            // 只显示「还没重置」的窗口。
+            //
+            // 额度快照是 Codex 上次跑完时写进日志的，可能已经过时。
+            // 如果重置时间已经过去，说明这个窗口早就回满了，
+            // 此时再报「已用 99%」纯属误导 —— 干脆不提。
+            let mut segments: Vec<String> = Vec::new();
+
+            // 时效判断始终用真实的重置时间；要不要显示则看 show_reset
+            let r5 = l.five_hour_resets_at;
+            let rw = l.weekly_resets_at;
+            let shown = |ts: Option<i64>| if cfg.show_reset { ts } else { None };
+
+            if r5.map_or(true, |ts| ts > now) {
+                segments.push(limit_segment("5h", l.five_hour, shown(r5), now, show_remaining));
+            }
+            if rw.map_or(true, |ts| ts > now) {
+                segments.push(limit_segment("周", l.weekly, shown(rw), now, show_remaining));
+            }
+
+            for s in segments {
+                meta.push_str(" · ");
+                meta.push_str(&s);
+            }
         }
     }
     let mut body = format!("{meta}\n");

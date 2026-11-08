@@ -16,7 +16,7 @@ use crate::logfile::log;
 ///
 /// 每个字段都给了默认值，所以 notify.toml 可以只写关心的那几项。
 /// 字段缺失不算错，缺整份文件也不算错（会走 fallback）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     /// 总开关。关掉后钩子直接退出，连日志都不发消息
     #[serde(default = "yes")]
@@ -38,6 +38,18 @@ pub struct Config {
     /// 是否在消息里带 5h / 周额度
     #[serde(default = "yes")]
     pub show_limits: bool,
+
+    /// 额度后面是否带「什么时候重置」
+    #[serde(default = "yes")]
+    pub show_reset: bool,
+
+    /// 额度按哪种口径显示：
+    ///   "used"      —— 已用 62%
+    ///   "remaining" —— 剩余 38%
+    ///
+    /// 用字符串而不是枚举：手写配置更直观，以后加新口径也不用改反序列化。
+    #[serde(default = "default_limit_style")]
+    pub limit_style: String,
 
     /// 是否在消息末尾带 `(turn N · thread XXXXXXXX)`
     ///
@@ -62,7 +74,7 @@ pub struct Config {
 /// NapCat 托管：让托盘启动时一并拉起它，退出时一起结束。
 ///
 /// 只在托盘模式下生效，钩子路径完全不碰这一段。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Napcat {
     /// 启动命令，数组形式（第一个元素是可执行文件或 .bat）。
     /// 留空表示不托管 —— 即使托盘在跑，也不会去动 NapCat。
@@ -78,8 +90,17 @@ pub struct Napcat {
     pub kill_on_exit: bool,
 }
 
+impl Default for Napcat {
+    fn default() -> Self {
+        Self {
+            command: Vec::new(),
+            kill_on_exit: true,
+        }
+    }
+}
+
 /// QQ 通道（走 OneBot v11 的 HTTP 接口，由 NapCat / LLOneBot 提供）
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Qq {
     /// NapCat 的 HTTP 服务地址，例如 `http://127.0.0.1:3000`
     #[serde(default = "default_base_url")]
@@ -117,6 +138,9 @@ fn default_base_url() -> String {
 fn default_prefix() -> String {
     "[Codex]".to_string()
 }
+fn default_limit_style() -> String {
+    "used".to_string()
+}
 
 impl Config {
     /// 读配置。任何异常都退回内置默认值，不 panic。
@@ -140,13 +164,15 @@ impl Config {
     }
 
     /// 兜底配置：除了默认值，两个通道都不启用（宁可不发，不可乱发）
-    fn fallback() -> Self {
+    pub fn fallback() -> Self {
         Config {
             enabled: true,
             max_chars: default_max_chars(),
             timeout_secs: default_timeout(),
             prefix: default_prefix(),
             show_limits: true,
+            show_reset: true,
+            limit_style: default_limit_style(),
             show_footer: false,
             chain: Vec::new(),
             qq: None,
@@ -205,6 +231,56 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// 把一项布尔设置写回 notify.toml。
+///
+/// 为什么用 toml_edit 而不是「重新序列化整个 Config」：
+/// 后者会把用户手写的注释、空行、字段顺序全部冲掉 ——
+/// 改一个勾选框却毁掉半份配置，比不做还糟。
+pub fn save_bool(key: &str, value: bool) -> Result<(), String> {
+    save_item(key, toml_edit::value(value))
+}
+
+/// 把一项字符串设置写回 notify.toml
+pub fn save_str(key: &str, value: &str) -> Result<(), String> {
+    save_item(key, toml_edit::value(value))
+}
+
+/// 把一项整数设置写回 notify.toml（档位循环用）
+pub fn save_int(key: &str, value: i64) -> Result<(), String> {
+    save_item(key, toml_edit::value(value))
+}
+
+fn save_item(key: &str, item: toml_edit::Item) -> Result<(), String> {
+    let path = config_path();
+
+    // 文件不存在就用模板起一份，保证写回去的是一份完整可用的配置
+    let text = fs::read_to_string(&path).unwrap_or_else(|_| CONFIG_TEMPLATE.to_string());
+    let mut doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| format!("配置解析失败: {e}"))?;
+
+    // 支持 "napcat.kill_on_exit" 这种点路径：逐级进入子表。
+    // toml_edit 的 Index 对完整字符串是按键名整体处理的，
+    // 不会自己拆点，所以这里手动走。
+    let parts: Vec<&str> = key.split('.').collect();
+    if parts.len() == 1 {
+        doc[parts[0]] = item;
+    } else {
+        let table = doc.as_table_mut();
+        let mut cur = table;
+        for part in &parts[..parts.len() - 1] {
+            if cur.get(part).map_or(true, |it| !it.is_table_like()) {
+                // 子表不存在（或被占成了普通值）就重建一个
+                cur[*part] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            cur = cur[*part].as_table_mut().ok_or("路径中间不是表")?;
+        }
+        cur[parts[parts.len() - 1]] = item;
+    }
+
+    fs::write(&path, doc.to_string()).map_err(|e| format!("写入失败: {e}"))
+}
+
 /// `--init` 生成的配置模板。
 ///
 /// 用单引号原始字符串包住：Windows 路径里的反斜杠不用转义，
@@ -219,6 +295,10 @@ timeout_secs = 5
 prefix = "[Codex]"
 # 消息里是否带上 5h / 周额度（从 ~/.codex 的会话日志里读，只读不写）
 show_limits = true
+# 额度后面是否带「什么时候重置」
+show_reset = true
+# 额度口径："used" 显示已用百分比，"remaining" 显示剩余百分比
+limit_style = "used"
 # 末尾是否带 (turn N · thread XXXXXXXX) 会话标记
 show_footer = false
 
