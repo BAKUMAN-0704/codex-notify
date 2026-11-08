@@ -12,7 +12,7 @@
 [Codex] 任务完成 · notify
 13:16 完成 · 5h 已用 62%（18:20 重置） · 周 已用 18%（下周日 09:56 重置）
 ---
-已把 notify 钩子接到 QQ 接口，测试通过。
+设计算法部分细节文档
 ```
 
 比“盯着终端等”省事，也比“跑完忘了回来看”安全。
@@ -258,6 +258,7 @@ token:    (已设置)
 |---|---|---|
 | `enabled` | `true` | 总开关。`false` 时钩子直接退出，不发消息 |
 | `only_main_agent` | `true` | 只通知主 Agent，挡掉子 Agent / 内部审查回合（见[下方专节](#子-agent-也会触发-notify)） |
+| `summary_source` | `"thread"` | 摘要显示什么：`"thread"` 会话名（读 `~/.codex/session_index.jsonl`）、`"message"` 最后一条回复、`"none"` 不显示。查不到会话名会自动退回 `"message"` |
 | `max_chars` | `260` | 摘要截断长度（按**字数**不是字节） |
 | `timeout_secs` | `5` | HTTP 超时。这个值决定回合结束后最多卡多久 |
 | `prefix` | `"[Codex]"` | 消息标题前缀 |
@@ -325,6 +326,7 @@ D:\tools\codex-notify\codex-notify.exe --tray
 | 显示重置时间 | `show_reset` | 例如 `（22:11 重置）` |
 | 额度显示为「剩余」 | `limit_style` | 关＝已用 6%，开＝剩余 94% |
 | 显示会话标记 turn/thread | `show_footer` | 多会话并行时才需要 |
+| 摘要内容：… | `summary_source` | 点击循环 会话名 → 最后一条回复 → 不显示 |
 | 摘要长度：N 字 | `max_chars` | 点击循环 80 → 160 → 260 → 400 → 600 |
 | HTTP 超时：N 秒 | `timeout_secs` | 点击循环 1 → 3 → 5 → 10 |
 | 退出托盘时一起关闭 NapCat | `[napcat].kill_on_exit` | 只作用于托盘自己启动的那个 |
@@ -413,7 +415,7 @@ codex-notify.exe --classify 01a1ba97-af78-7db1-9dbf-86c1b836aeb1
 
 **回合结束后感觉卡了一下？** 因为 Codex 会等这个进程退出。本机 NapCat 通常 5 ms 就返回，但如果你把 `base_url` 指向了远程地址，就会明显变慢。可以调小 `timeout_secs`。
 
-**消息会不会把代码发出去？** 不会。发送的是项目名（工作目录最后一段）、完成时间、额度百分比，以及 Codex 最后一条回复的前 `max_chars` 个字；Codex 没输出文字时会退用你最后一条指令当摘要。不发完整路径，也不发文件内容。
+**消息会不会把代码发出去？** 不会。发送的是项目名（工作目录最后一段）、完成时间、额度百分比，以及会话名（默认）或 Codex 最后一条回复的前 `max_chars` 个字（可切换，也可关掉）。不发完整路径，也不发文件内容。
 
 ---
 
@@ -422,7 +424,7 @@ codex-notify.exe --classify 01a1ba97-af78-7db1-9dbf-86c1b836aeb1
 - 在 Windows 上开发和验证，代码本身是跨平台的，但其他平台未测试。
 - 依赖 NapCat 常驻。NapCat 退出、掉线，或者 QQ 自动更新导致注入失效，通知都会中断（`--check` 能看出来）。
 - NapCat 是第三方对 QQ 客户端的协议实现，属于灰色地带，账号有被风控的可能。请自行评估，建议用小号。
-- `only_main_agent` 依赖 Codex 会话日志里的 `thread_source` —— 这是内部字段，未写进官方文档。字段若变动，程序会自动退回「全部照常通知」（不会漏推，但可能又开始收到子 Agent 的推送），此时升级本程序或关掉该开关即可。
+- `only_main_agent` 和 `summary_source = "thread"` 依赖 Codex 的本地内部文件（会话日志 `thread_source`、`session_index.jsonl`），都未写进官方文档。字段或路径变了会自动退回旧行为（全部照常通知 / 显示最后一条回复），不会漏推，此时升级本程序即可。
 
 ---
 

@@ -129,8 +129,8 @@ pub fn check(cfg: &Config) {
     println!("enabled: {} / only_main_agent: {}", cfg.enabled, cfg.only_main_agent);
     println!("prefix: {}", cfg.prefix);
     println!(
-        "show_limits: {} / show_reset: {} / limit_style: {} / show_footer: {}",
-        cfg.show_limits, cfg.show_reset, cfg.limit_style, cfg.show_footer
+        "show_limits: {} / show_reset: {} / limit_style: {} / show_footer: {} / summary_source: {}",
+        cfg.show_limits, cfg.show_reset, cfg.limit_style, cfg.show_footer, cfg.summary_source
     );
     println!("chain: {} 个", cfg.chain.len());
     println!();

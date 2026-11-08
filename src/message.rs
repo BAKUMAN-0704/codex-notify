@@ -59,6 +59,18 @@ fn limit_segment(
     s
 }
 
+/// 旧版摘要：优先用 Codex 最后说的话；只调了工具、没输出文字时，
+/// 退回你发出的最后一句指令，至少能知道是哪个回合结束了。
+fn message_summary(ev: &Event, max_chars: usize) -> Option<String> {
+    ev.last_assistant_message
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| ev.input_messages.last().cloned())
+        .map(|s| clip(&s, max_chars))
+        .filter(|s| !s.is_empty())
+}
+
 /// 把事件拼成通知。
 ///
 /// 最终形态（`show_footer = true` 时）：
@@ -66,7 +78,7 @@ fn limit_segment(
 /// [Codex] 任务完成 · notify          ← title
 /// 11:44 完成 · 5h 已用 88% · 周 已用 14%
 /// ---
-/// 已把 notify 钩子接到 QQ 接口。      ← 摘要，来自 assistant 最后一句话
+/// 设计算法部分细节文档              ← 摘要，默认显示会话名
 /// (turn 12 · thread b5f6c1c2)
 /// ```
 pub fn compose(ev: &Event, cfg: &Config) -> Message {
@@ -117,19 +129,18 @@ pub fn compose(ev: &Event, cfg: &Config) -> Message {
     }
     let mut body = format!("{meta}\n");
 
-    // ---- 摘要：优先用 Codex 最后说的话 ----
-    // 退回 input_messages 的场景：这一轮 Codex 只调了工具、没输出文字，
-    // 此时 last_assistant_message 是空的。用你发出的那句指令当摘要，
-    // 至少能知道「是哪个任务的回合结束了」。
-    let summary = ev
-        .last_assistant_message
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| ev.input_messages.last().cloned())
-        .map(|s| clip(&s, cfg.max_chars))
-        .unwrap_or_default();
-    if !summary.is_empty() {
+    // ---- 摘要 ----
+    // 默认显示 Codex 给会话起的名字，比「最后一条回复」更能说明刚才是哪个任务。
+    // 索引里查不到名字时退回旧摘要，避免通知变成只有时间的一行。
+    let source = cfg.summary_source.trim().to_ascii_lowercase();
+    let summary = match source.as_str() {
+        "none" => None,
+        "message" => message_summary(ev, cfg.max_chars),
+        _ => crate::thread_name::read_thread_name(&ev.thread_id)
+            .map(|s| clip(&s, cfg.max_chars))
+            .or_else(|| message_summary(ev, cfg.max_chars)),
+    };
+    if let Some(summary) = summary.filter(|s| !s.is_empty()) {
         body.push_str("---\n");
         body.push_str(&summary);
         body.push('\n');
