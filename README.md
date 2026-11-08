@@ -308,6 +308,28 @@ D:\tools\codex-notify\codex-notify.exe --tray
 
 **托盘只是个看板，不在发送路径上。** Codex 每回合仍然是独立进程直接发消息，不经过托盘——所以托盘关掉不影响通知，也不影响回合收尾速度。
 
+### 托管 NapCat（可选）
+
+不想每次开机手动开 NapCat，可以让托盘把它带上：
+
+```toml
+[napcat]
+# Windows 版 NapCat 的启动脚本（换成你自己的路径）
+command = ['D:\tools\NapCat\launcher-user.bat']
+# 退出托盘时一起结束
+kill_on_exit = true
+```
+
+配好之后：
+
+- **托盘启动时**，如果 NapCat 没在跑（端口连不上），就一并拉起
+- **托盘退出时**，把 NapCat 一起结束
+- **只管自己启动的那个**。你手动开的 NapCat 它不认识，既不接管也不杀——所以不会出现「点一下退出，QQ 突然掉线」的意外
+
+`launcher-user.bat` 不提权，`launcher.bat` 会弹 UAC。如果你的 QQ 装在 `Program Files` 下、用户态注入失败，换成后者。
+
+**实现上没有逐个 kill PID，用的是 Job Object。** NapCat 的进程树是 `cmd → NapCatWinBootMain.exe → QQ.exe（+ 若干渲染子进程）`，逐 PID 清理容易漏、也会被 PID 复用坑到。Job Object 设上 `KILL_ON_JOB_CLOSE` 之后，本进程退出 → 句柄关闭 → 整棵树一起结束，不需要写任何清理逻辑。
+
 ---
 
 ## 额度是从哪来的

@@ -55,6 +55,8 @@ mod qq;
 mod text;
 
 #[cfg(windows)]
+mod napcat;
+#[cfg(windows)]
 mod tray;
 
 use std::env;
@@ -151,6 +153,12 @@ fn main() {
         println!("--- 目标 ---");
         println!("{}", if cfg.qq.is_some() { "QQ（OneBot）" } else { "(未配置)" });
         return;
+    }
+
+    // 走到这里还没解析出事件，说明调用方式不对（比如手动跑却没带 JSON）。
+    // 记一笔方便排查；上面 --dry-run 走样例数据属于正常用法，不记。
+    if event.kind.is_empty() {
+        log(&format!("未能解析事件 JSON，参数 {args:?}"));
     }
 
     // 只认 agent-turn-complete。Codex 未来若新增事件类型，

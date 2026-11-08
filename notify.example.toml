@@ -42,3 +42,19 @@ access_token = ""
 # 发给自己：private:你的QQ号
 # 发到群：  group:群号
 target = "private:123456789"
+
+# 托管 NapCat（可选，仅托盘模式生效）
+#
+# 配了之后：
+#   - 托盘启动时，如果 NapCat 没在跑（端口连不上），就一并拉起它
+#   - 托盘退出时，把「由本程序启动的」NapCat 一起结束
+#   - 你手动开的 NapCat 不在管控范围：它不接管，也不会去杀
+#
+# 留空 command 就等于不托管。
+[napcat]
+# Windows 版 NapCat 的启动脚本。launcher-user.bat 不提权；
+# 如果你的 QQ 装在 Program Files 且注入失败，换成会弹 UAC 的 launcher.bat
+# command = ['D:\tools\NapCat\launcher-user.bat']
+command = []
+# 退出托盘时是否结束 NapCat（只针对上面这条命令启动的那个）
+kill_on_exit = true
