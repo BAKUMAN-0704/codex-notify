@@ -1,0 +1,40 @@
+# codex-notify 配置示例
+#
+# 用法：复制成 notify.toml 放在 exe 旁边，然后改下面三处：
+#   1. chain    —— 如果你还需要原来的 notify 程序
+#   2. access_token —— 和 NapCat 里配的保持一致
+#   3. target   —— 改成你自己的 QQ 号
+#
+# 或者直接运行 `codex-notify --init` 生成一份，效果一样。
+
+enabled = true
+# 摘要最多保留多少个字符（按字数算，一个汉字算 1）
+max_chars = 260
+# 单次 HTTP 超时（秒）。这个值直接决定回合结束后最多卡多久
+timeout_secs = 5
+# 消息标题前缀
+prefix = "[Codex]"
+# 消息里是否带上 5h / 周额度（从 ~/.codex 的会话日志里读，只读不写）
+show_limits = true
+# 末尾是否带 (turn N · thread XXXXXXXX) 会话标记
+show_footer = false
+
+# 链式转发：Codex 的 notify 槽位只有一个。
+# 如果你的 Codex 桌面版原本用它做别的事（比如桌宠动画），
+# 把那条原命令按数组写在这里，我们会先转发给它再发通知。
+#
+# 例如（Windows 桌面版默认值，路径随版本变化）：
+# chain = ['C:\Users\you\AppData\Local\OpenAI\Codex\runtimes\...\codex-computer-use.exe', 'turn-ended']
+#
+# 不需要就留空：
+chain = []
+
+[qq]
+# NapCat / LLOneBot 的 HTTP 服务地址（WebUI 里「网络配置 -> HTTP 服务器」）
+base_url = "http://127.0.0.1:3000"
+# OneBot 的 access_token。NapCat 里设了就要填一致的，没设就留空。
+# 注意：这个接口能以你的 QQ 身份发消息，建议至少设一个 token。
+access_token = ""
+# 发给自己：private:你的QQ号
+# 发到群：  group:群号
+target = "private:123456789"

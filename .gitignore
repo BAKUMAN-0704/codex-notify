@@ -1,0 +1,24 @@
+# 构建产物
+/target
+
+# 编译出来的可执行文件（用 cargo build --release 自己生成）
+/codex-notify.exe
+/codex-notify
+
+# 运行时数据：日志里有本地路径和发送目标
+/notify.log
+/notify.log.1
+
+# 真实配置：含 OneBot access_token 和你的 QQ 号，绝不能入库。
+# 仓库里提供的是 notify.example.toml，首次使用跑一次 --init 或手工复制。
+/notify.toml
+
+# 个人工作记录（对话备忘、调试笔记），不属于项目代码
+/.workbuddy/
+
+# 编辑器 / 系统杂项
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
