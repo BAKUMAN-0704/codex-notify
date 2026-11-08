@@ -13,8 +13,6 @@
 
 use serde::Deserialize;
 
-use crate::logfile::log;
-
 /// 一次回合结束事件。
 ///
 /// 所有字段都加了 `default`：Codex 版本之间字段名和有无会变
@@ -62,6 +60,9 @@ pub struct Event {
 /// 第二个返回值是原始 JSON 文本，用于原样转发给 chain 上的程序：
 /// 转发的必须是原始字节，不能是我们反序列化再序列化一遍的版本，
 /// 否则字段顺序、未知字段都会丢。
+///
+/// 找不到时返回空事件，**这里不记日志** —— `--dry-run` 不带事件本来就该
+/// 退回样例数据，由调用方决定要不要抱怨。
 pub fn parse_event(args: &[String]) -> (Event, Option<String>) {
     for arg in args.iter().rev() {
         let trimmed = arg.trim();
@@ -72,7 +73,6 @@ pub fn parse_event(args: &[String]) -> (Event, Option<String>) {
             return (ev, Some(trimmed.to_string()));
         }
     }
-    log(&format!("未能解析事件 JSON，参数 {args:?}"));
     (Event::default(), None)
 }
 

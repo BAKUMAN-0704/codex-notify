@@ -53,6 +53,29 @@ pub struct Config {
     /// QQ 通道配置。整段不写就是不发。
     #[serde(default)]
     pub qq: Option<Qq>,
+
+    /// NapCat 托管配置。整段不写就是不管它。
+    #[serde(default)]
+    pub napcat: Option<Napcat>,
+}
+
+/// NapCat 托管：让托盘启动时一并拉起它，退出时一起结束。
+///
+/// 只在托盘模式下生效，钩子路径完全不碰这一段。
+#[derive(Debug, Deserialize)]
+pub struct Napcat {
+    /// 启动命令，数组形式（第一个元素是可执行文件或 .bat）。
+    /// 留空表示不托管 —— 即使托盘在跑，也不会去动 NapCat。
+    ///
+    /// 例：`['D:\tools\NapCat\launcher-user.bat']`
+    #[serde(default)]
+    pub command: Vec<String>,
+
+    /// 托盘退出时是否把 NapCat 一起结束。
+    ///
+    /// 只会结束**由本程序启动的**那个；你自己手动开的 NapCat 它不认识，也不会去杀。
+    #[serde(default = "yes")]
+    pub kill_on_exit: bool,
 }
 
 /// QQ 通道（走 OneBot v11 的 HTTP 接口，由 NapCat / LLOneBot 提供）
@@ -127,6 +150,7 @@ impl Config {
             show_footer: false,
             chain: Vec::new(),
             qq: None,
+            napcat: None,
         }
     }
 }

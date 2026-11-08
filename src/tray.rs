@@ -47,6 +47,13 @@ const WM_TRAY: u32 = WM_APP + 1;
 const ID_TEST: usize = 1;
 const ID_OPEN_DIR: usize = 2;
 const ID_QUIT: usize = 3;
+const ID_START_NAPCAT: usize = 4;
+
+/// 由本程序启动的 NapCat。放在静态里是为了让菜单（窗口过程）也能访问。
+///
+/// 它一旦被 `drop`，内部的 Job 句柄关闭，整棵 NapCat 进程树随之结束 ——
+/// 所以「退出时带着 NapCat 退出」只是把这个 Option 置空而已。
+static GUARD: std::sync::Mutex<Option<crate::napcat::Managed>> = std::sync::Mutex::new(None);
 
 /// 把 `&str` 转成 Win32 需要的以 0 结尾的 UTF-16
 fn wide(s: &str) -> Vec<u16> {
@@ -153,14 +160,28 @@ pub fn run(cfg: Config) {
 
         crate::logfile::log("托盘已启动");
 
-        // 4. 标准消息循环。GetMessageW 返回 0 表示收到 WM_QUIT
+        // 4. 如果配了 NapCat 且它没在跑，就顺带拉起来。
+        //    已经在跑（端口能连上）说明是你手动开的，不认识也不去接管。
+        if let Some(nc) = CFG.get().and_then(|c| c.napcat.as_ref()) {
+            if !nc.command.is_empty() && !napcat_online() {
+                start_napcat(nc);
+            }
+        }
+
+        // 5. 标准消息循环。GetMessageW 返回 0 表示收到 WM_QUIT
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
 
-        // 5. 收尾：把图标删掉，否则鼠标划过托盘会留下一个「幽灵图标」
+        // 6. 收尾。先结束托管的 NapCat（关 Job 句柄 → 整棵树一起走），
+        //    再删托盘图标，否则鼠标划过托盘会留下一个「幽灵图标」。
+        if let Ok(mut g) = GUARD.lock() {
+            if g.take().is_some() {
+                crate::logfile::log("已结束托管的 NapCat");
+            }
+        }
         Shell_NotifyIconW(NIM_DELETE, &nid);
         crate::logfile::log("托盘已退出");
     }
@@ -272,6 +293,27 @@ unsafe fn show_menu(hwnd: HWND) {
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status_w.as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
+    // 只有配了 napcat.command 才显示这一项；已经在跑就置灰（说明是手动开的，我们不管）
+    let has_napcat_cfg = CFG
+        .get()
+        .and_then(|c| c.napcat.as_ref())
+        .is_some_and(|n| !n.command.is_empty());
+    if has_napcat_cfg {
+        let running = napcat_online();
+        let label = if running {
+            "NapCat 已在运行"
+        } else {
+            "启动 NapCat"
+        };
+        let w = wide(label);
+        let flags = if running {
+            MF_STRING | MF_GRAYED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(menu, flags, ID_START_NAPCAT, w.as_ptr());
+    }
+
     let test_w = wide("发送测试消息");
     let open_w = wide("打开配置目录");
     let quit_w = wide("退出");
@@ -301,6 +343,11 @@ unsafe fn show_menu(hwnd: HWND) {
     match cmd {
         ID_TEST => send_test(),
         ID_OPEN_DIR => open_config_dir(),
+        ID_START_NAPCAT => {
+            if let Some(nc) = CFG.get().and_then(|c| c.napcat.as_ref()) {
+                start_napcat(nc);
+            }
+        }
         ID_QUIT => {
             // 先删图标再关窗口：顺序反了会在托盘留下残影
             // 该结构体没有 Default 实现，直接清零（所有字段的零值都是合法初始状态）
@@ -321,6 +368,29 @@ fn send_test() {
     let event = crate::event::test_event();
     let msg = crate::message::compose(&event, cfg);
     crate::deliver(cfg, &msg, &event.cwd);
+}
+
+/// 拉起 NapCat 并接管它的生命周期。
+///
+/// 已经在托管中就不重复启动（防止连点两下菜单开出两个 QQ）。
+fn start_napcat(nc: &crate::config::Napcat) {
+    // 已经有一个在托管，直接忽略
+    if GUARD.lock().map(|g| g.is_some()).unwrap_or(false) {
+        return;
+    }
+    match crate::napcat::start(&nc.command, nc.kill_on_exit) {
+        Ok(Some(guard)) => {
+            if let Ok(mut g) = GUARD.lock() {
+                *g = Some(guard);
+            }
+            crate::logfile::log("NapCat 已纳入托管，退出托盘时会一起结束");
+        }
+        Ok(None) => {
+            // kill_on_exit = false，或者加不进 Job：进程已在跑，只是不归我们管
+            crate::logfile::log("NapCat 已启动，但未纳入托管");
+        }
+        Err(e) => crate::logfile::log(&format!("NapCat 启动失败: {e}")),
+    }
 }
 
 /// 用资源管理器打开配置文件所在目录

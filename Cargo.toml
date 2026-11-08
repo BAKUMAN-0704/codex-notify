@@ -1,6 +1,6 @@
 [package]
 name = "codex-notify"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Codex 的 notify 钩子：回合结束时把结果推到 QQ"
 
@@ -23,7 +23,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",      # WNDCLASSW 里的 hbrBackground 需要 HBRUSH
     "Win32_System_Console",
+    "Win32_System_JobObjects", # 托管 NapCat：进程关闭时连带结束整棵进程树
+    "Win32_Security",          # CreateJobObjectW 的参数类型 SECURITY_ATTRIBUTES
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",  # OpenProcess
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
