@@ -43,6 +43,7 @@
 // 这一步在 main 开头无条件执行。
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod agent;
 mod chain;
 mod cli;
 mod clock;
@@ -104,6 +105,20 @@ fn main() {
         match args.iter().position(|a| a == "--set").and_then(|i| args.get(i + 1)) {
             Some(pair) => cli::set(pair),
             None => println!("--set 需要一个 key=value 参数，例如 --set show_limits=false"),
+        }
+        return;
+    }
+
+    // --classify <thread-id>：只判定、不发消息，用来排查「这条通知是谁触发的」。
+    // 放在读配置之前，配置坏了也能用。
+    if flag == "--classify" {
+        match args
+            .iter()
+            .position(|a| a == "--classify")
+            .and_then(|i| args.get(i + 1))
+        {
+            Some(id) => cli::classify(id),
+            None => println!("用法: --classify <thread-id>"),
         }
         return;
     }
@@ -182,6 +197,28 @@ fn main() {
     // 顺序很重要：万一后面网络卡住，桌宠也已经动起来了。
     if let Some(raw) = raw {
         chain::run(&cfg.chain, &raw);
+    }
+
+    // 只通知主 Agent 时把子 Agent / 内部审查回合挡掉。
+    // 必须放在 chain 之后：桌宠该收到的事件一个都不能少，我们只拦自己这条消息。
+    // 判定依据是 Codex 的会话日志（内部实现细节），所以查不到时一律放行。
+    if cfg.only_main_agent {
+        let verdict = agent::classify(&event.thread_id);
+        if verdict.origin.should_skip() {
+            log(&format!(
+                "跳过子 Agent 通知: thread {} · {}",
+                event.thread_id,
+                verdict.thread_source.as_deref().unwrap_or("来源未知")
+            ));
+            return;
+        }
+        // 留一行线索：桌宠转发过来的 thread-id 到底是什么、判成了什么。
+        // 万一 Codex 改版换了 ID 语义，看这里就能发现，不用猜。
+        log(&format!(
+            "thread {} → {}",
+            event.thread_id,
+            verdict.origin.label()
+        ));
     }
 
     deliver(&cfg, &compose(&event, &cfg), &event.cwd);

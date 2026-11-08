@@ -27,7 +27,7 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::{
-    ExtractIconExW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    ExtractIconExW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
     NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -35,7 +35,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, KillTimer, LoadCursorW,
     PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TrackPopupMenu, TranslateMessage,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
-    SM_CXSMICON, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
+    SM_CXSMICON, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
     WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 
@@ -59,6 +59,7 @@ const ID_TOGGLE_ENABLED: usize = 14;
 const ID_TOGGLE_KILL_EXIT: usize = 15;
 const ID_CYCLE_MAX_CHARS: usize = 16;
 const ID_CYCLE_TIMEOUT: usize = 17;
+const ID_TOGGLE_MAIN_ONLY: usize = 18;
 
 /// 摘要长度的档位。菜单没法输数字，用「点一下换下一档」代替输入框。
 /// 260 是默认档；80 适合只想瞄一眼，600 基本是全文。
@@ -443,6 +444,15 @@ unsafe fn show_menu(hwnd: HWND) {
             MF_STRING
         };
         AppendMenuW(sub, flags, ID_TOGGLE_ENABLED, enabled_w.as_ptr());
+
+        // 子 Agent 结束也会触发 notify，但它们不代表「活干完了」
+        let main_only_w = wide("只通知主 Agent");
+        let flags = if cfg_now.only_main_agent {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(sub, flags, ID_TOGGLE_MAIN_ONLY, main_only_w.as_ptr());
         AppendMenuW(sub, MF_SEPARATOR, 0, std::ptr::null());
 
         // 第二组：显示相关
@@ -528,6 +538,7 @@ unsafe fn show_menu(hwnd: HWND) {
         ID_TOGGLE_FOOTER => toggle_bool("show_footer", cfg_now.show_footer),
         ID_TOGGLE_REMAINING => toggle_limit_style(),
         ID_TOGGLE_ENABLED => toggle_bool("enabled", cfg_now.enabled),
+        ID_TOGGLE_MAIN_ONLY => toggle_bool("only_main_agent", cfg_now.only_main_agent),
         ID_TOGGLE_KILL_EXIT => {
             let on = cfg_now.napcat.as_ref().is_some_and(|n| n.kill_on_exit);
             toggle_bool("napcat.kill_on_exit", on);
@@ -558,6 +569,7 @@ fn toggle_bool(key: &str, current: bool) {
     if let Ok(mut c) = cfg().write() {
         match key {
             "enabled" => c.enabled = new,
+            "only_main_agent" => c.only_main_agent = new,
             "show_limits" => c.show_limits = new,
             "show_reset" => c.show_reset = new,
             "show_footer" => c.show_footer = new,
@@ -664,6 +676,53 @@ fn stop_napcat() {
     }
 }
 
+/// 把二维码弹给用户看。
+///
+/// 不能直接打开 NapCat 的 `cache/qrcode.png`：刷新二维码是**覆盖同一个文件**，
+/// 看图程序已经开着它时，Shell 会认为「已经在看了」—— 既不新建窗口也不刷新，
+/// 新码就静默躺在磁盘上；有些看图程序还会锁住文件，干扰 NapCat 下次写入。
+///
+/// 所以先复制成一份唯一名字的快照再打开：
+///   · 每次都是「新文件」，看图程序必定新开窗口/标签
+///   · 看图程序锁的是副本，NapCat 覆盖原文件不受影响
+///   · 用 ShellExecuteW 而不是 explorer.exe 中转，能拿到成败结果并指定 SW_SHOWNORMAL
+/// 复制一份带唯一名字的快照。单独拆出来是为了能单测，不弹窗。
+fn qrcode_snapshot(src: &std::path::Path, seq: u32) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("codex-notify");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建临时目录失败: {e}"))?;
+
+    // 时间戳 + 序号：同一秒内连续刷新也不会撞名
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dst = dir.join(format!("qrcode-{stamp}-{seq}.png"));
+    std::fs::copy(src, &dst).map_err(|e| format!("复制二维码失败: {e}"))?;
+    Ok(dst)
+}
+
+fn show_qrcode(src: &std::path::Path, seq: u32) -> Result<PathBuf, String> {
+    let dst = qrcode_snapshot(src, seq)?;
+
+    let op = wide("open");
+    let file = wide(&dst.display().to_string());
+    // ShellExecuteW 返回 <= 32 表示失败，那个值本身是错误码
+    let ret = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL as i32,
+        )
+    } as isize;
+    if ret <= 32 {
+        return Err(format!("ShellExecuteW 返回 {ret}"));
+    }
+    Ok(dst)
+}
+
 /// 盯着 NapCat 的登录二维码，出了新的就自动弹出来。
 ///
 /// 只在托盘自己启动 NapCat 之后调用。最多看 5 分钟、最多弹 3 次 ——
@@ -677,7 +736,9 @@ fn watch_qrcode(command: &[String]) {
 
     std::thread::spawn(move || {
         let mut last: Option<std::time::SystemTime> = None;
-        let mut opened = 0;
+        let mut opened: u32 = 0;
+        // 上一份快照留着，弹下一张时顺手删掉（看图程序锁着就删不掉，忽略）
+        let mut previous: Option<PathBuf> = None;
 
         // 150 次 × 2 秒 = 5 分钟，足够走完"扫码 → 手机确认"。
         for _ in 0..150 {
@@ -697,11 +758,27 @@ fn watch_qrcode(command: &[String]) {
             if mtime >= started && last != Some(mtime) && opened < 3 {
                 last = Some(mtime);
                 opened += 1;
-                // explorer 会用系统默认看图程序打开它
-                let _ = std::process::Command::new("explorer")
-                    .arg(path.as_os_str())
-                    .spawn();
-                crate::logfile::log(&format!("已弹出登录二维码: {}", path.display()));
+
+                if let Some(old) = previous.take() {
+                    let _ = std::fs::remove_file(old);
+                }
+                match show_qrcode(&path, opened) {
+                    Ok(shown) => {
+                        previous = Some(shown.clone());
+                        crate::logfile::log(&format!(
+                            "已弹出登录二维码: {}（快照 {}）",
+                            path.display(),
+                            shown.display()
+                        ));
+                    }
+                    Err(e) => {
+                        // 兜底：ShellExecute 失败时再试一次 explorer，别静默吞掉
+                        let _ = std::process::Command::new("explorer")
+                            .arg(path.as_os_str())
+                            .spawn();
+                        crate::logfile::log(&format!("弹出二维码失败（{e}），已回退 explorer"));
+                    }
+                }
             }
         }
     });
@@ -720,4 +797,27 @@ fn open_config_dir() {
 #[allow(dead_code)]
 fn small_icon_size() -> i32 {
     unsafe { GetSystemMetrics(SM_CXSMICON) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：二维码每次刷新都必须拿到**不同的文件名**。
+    /// 旧实现直接打开 NapCat 那个固定名字的 qrcode.png，看图程序开着时刷新就弹不出来。
+    #[test]
+    fn qrcode_refresh_always_gets_a_fresh_snapshot() {
+        let src = std::env::temp_dir().join(format!("codex-notify-src-{}.png", std::process::id()));
+        std::fs::write(&src, b"fake png bytes").unwrap();
+
+        let first = qrcode_snapshot(&src, 1).unwrap();
+        let second = qrcode_snapshot(&src, 2).unwrap();
+        assert_ne!(first, second, "刷新后的快照不能和上一张同名");
+        assert_eq!(std::fs::read(&first).unwrap(), b"fake png bytes");
+        assert_eq!(std::fs::read(&second).unwrap(), b"fake png bytes");
+
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
+        let _ = std::fs::remove_file(src);
+    }
 }

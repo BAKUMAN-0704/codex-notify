@@ -6,11 +6,11 @@
 
 <p align="center">Codex 每完成一个回合，把结果推到你的 QQ。</p>
 
-一个很小的 Rust 程序（约 0.85 MB、单文件、无运行时依赖），挂在 Codex 的 `notify` 钩子上。当 Codex 干完活、等你回话的时候，你手机上会收到一条这样的消息：
+一个很小的 Rust 程序（约 0.9 MB、单文件、无运行时依赖），挂在 Codex 的 `notify` 钩子上。当 Codex 干完活、等你回话的时候，你手机上会收到一条这样的消息：
 
 ```
 [Codex] 任务完成 · notify
-13:16 完成 · 5h 已用 62% · 周 已用 18%
+13:16 完成 · 5h 已用 62%（18:20 重置） · 周 已用 18%（下周日 09:56 重置）
 ---
 已把 notify 钩子接到 QQ 接口，测试通过。
 ```
@@ -23,7 +23,7 @@
 
 ## 它是怎么工作的
 
-Codex 的 `config.toml` 里有个 `notify` 配置项：每次回合结束，Codex 会拉起这个程序，并把事件 JSON 作为**最后一个命令行参数**传进来。所以它是个一次性进程——启动、发一条消息、退出。
+Codex 的 `config.toml` 里有个 `notify` 配置项：每次回合结束，Codex 会拉起这个程序，并把事件 JSON 作为**最后一个命令行参数**传进来。所以钩子路径是个一次性进程——启动、发一条消息、退出（托盘模式是常驻的例外）。
 
 ```
 Codex 回合结束
@@ -60,7 +60,7 @@ Codex 的 `notify` **全局只有一个槽位**。而 Codex 桌面版默认把�
 |---|---|---|
 | **Codex** | CLI 或桌面版均可，需要能改 `~/.codex/config.toml` | 必需 |
 | **NapCat**（或任何 OneBot v11 实现） | 提供 HTTP 接口，且已登录一个 QQ 号 | 必需 |
-| **Rust 1.70+** | 只有「自己编译」才需要，下载预编译版本可以跳过 | 可选 |
+| **Rust 1.82+** | 只有「自己编译」才需要，下载预编译版本可以跳过 | 可选 |
 
 ---
 
@@ -89,7 +89,7 @@ Codex 的 `notify` **全局只有一个槽位**。而 Codex 桌面版默认把�
    Get-FileHash .\codex-notify.exe -Algorithm SHA256
    ```
 
-单文件、无运行时依赖，约 730 KB，Windows 10/11 x64。
+单文件、无运行时依赖，约 0.9 MB，Windows 10/11 x64。
 
 ### 方式二：自己编译
 
@@ -107,7 +107,7 @@ cargo build --release
 copy target\release\codex-notify.exe D:\tools\codex-notify\      # 换成你的目录
 ```
 
-> 编译时 `build.rs` 会把 `assets/codex-notify.ico` 嵌进 exe（任务栏和资源管理器里显示的就是它）。这一步需要 Windows SDK 里的 `rc.exe`；如果你的机器上找不到，只会打一条 warning 然后继续，产物正常可用、只是图标是默认的。想手动指定路径就设 `CODEX_NOTIFY_RC_DIR` 指向含 `rc.exe` 的目录。
+> 编译时 `build.rs` 会把 `assets/codex-notify.ico` 嵌进 exe，并写入文件描述 `codex-notify`（任务栏、文件属性里显示的就是它们）。这一步需要 Windows SDK 里的 `rc.exe`；如果你的机器上找不到，只会打一条 warning 然后继续，产物正常可用、只是图标是默认的。想手动指定路径就设 `CODEX_NOTIFY_RC_DIR` 指向含 `rc.exe` 的目录。
 
 > 下面的配置步骤，两种方式完全相同。
 
@@ -181,7 +181,7 @@ setx CODEX_NOTIFY_DIR "D:\my-config\codex-notify"
 - 只在某个终端窗口里 `$env:CODEX_NOTIFY_DIR = ...` **不够**——那个变量只存在于当前窗口，Codex 的进程看不到。
 - 换目录后 `notify.toml` 要自己搬过去，程序不会自动迁移；找不到配置时它会用内置默认值，表现是「不发消息、也不报错」，容易误判。
 
-查找顺序（先命中先用）：`CODEX_NOTIFY_DIR` → exe 同目录 → exe 的上两级。最后一条是为了让 `target\release` 里的产物也能找到项目根的配置，方便开发调试。
+查找顺序（先命中先用）：`CODEX_NOTIFY_DIR` → exe 同目录 → 上一级 → 上两级。最后一条是为了让 `target\release` 里的产物也能找到项目根的配置，方便开发调试。
 
 ### 第三步：接管 Codex 的 notify 槽位
 
@@ -244,7 +244,7 @@ token:    (已设置)
 
 「连通性 OK」说明配置读对了、NapCat 也在线。这一步不验证「能不能真的发出去」，只验证「连得上、登录着」。
 
-② 会真的往你手机发一条。收到了就说明整条链路通了。没收到就看 exe 同目录的 `notify.log`，里面会写明失败原因（连接被拒、HTTP 401、retcode 非 0 等）。
+② 会真的往你手机发一条。收到了就说明整条链路通了。没收到就看配置同目录的 `notify.log`，里面会写明失败原因（连接被拒、HTTP 401、retcode 非 0 等）。
 
 最后回到 Codex 随便跑一个回合，确认它也会自动触发。
 
@@ -257,10 +257,11 @@ token:    (已设置)
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `enabled` | `true` | 总开关。`false` 时钩子直接退出，不发消息 |
+| `only_main_agent` | `true` | 只通知主 Agent，挡掉子 Agent / 内部审查回合（见[下方专节](#子-agent-也会触发-notify)） |
 | `max_chars` | `260` | 摘要截断长度（按**字数**不是字节） |
 | `timeout_secs` | `5` | HTTP 超时。这个值决定回合结束后最多卡多久 |
 | `prefix` | `"[Codex]"` | 消息标题前缀 |
-| `show_limits` | `true` | 是否带 5h / 周额度 |
+| `show_limits` | `true` | 是否带 5h / 周额度（只读 Codex 会话日志） |
 | `show_reset` | `true` | 额度后面是否带「什么时候重置」 |
 | `limit_style` | `"used"` | `"used"` 显示已用百分比，`"remaining"` 显示剩余百分比 |
 | `show_footer` | `false` | 是否带末尾的 `(turn N · thread XXXXXXXX)`，多会话并行时才建议开 |
@@ -278,9 +279,10 @@ token:    (已设置)
 | 命令 | 作用 |
 |---|---|
 | `codex-notify.exe '<JSON>'` | 由 Codex 调用，正常路径 |
-| `--tray` | 常驻托盘，右键可看状态 / 发测试 / 打开配置 / 退出（仅 Windows） |
+| `--tray` | 常驻托盘；双击 exe 不带参数也会进托盘。右键可看状态 / 发测试 / 改设置 / 管 NapCat（仅 Windows） |
 | `--test` | 用一条假事件真发一条，验证整条链路 |
 | `--set key=value` | 改一项配置并写回（`--set show_limits=false`），和托盘设置菜单同一条路径 |
+| `--classify <thread-id>` | 查这个 thread 会被判为主/子 Agent、会不会被过滤，不发消息 |
 | `--dry-run` | 只打印将要发送的内容，不发请求 |
 | `--check` | 检查配置解析 + 探测 NapCat 连通性 |
 | `--init` | 生成默认配置（已存在不覆盖） |
@@ -296,7 +298,7 @@ token:    (已设置)
 
 ### 托盘模式（`--tray`）
 
-想要一个「看得见、关得掉」的入口，就让它常驻托盘。双击 exe 传不了参数，所以建个快捷方式，把「目标」填成：
+想要一个「看得见、关得掉」的入口，就让它常驻托盘。双击 exe（不带任何参数）即可；也可以显式指定：
 
 ```
 D:\tools\codex-notify\codex-notify.exe --tray
@@ -318,6 +320,7 @@ D:\tools\codex-notify\codex-notify.exe --tray
 | 菜单项 | 配置项 | 说明 |
 |---|---|---|
 | 启用通知 | `enabled` | 总开关，关掉后钩子静默退出 |
+| 只通知主 Agent | `only_main_agent` | 子 Agent / 内部审查回合完成时不再推送 |
 | 显示额度 | `show_limits` | 关掉后消息里只剩时间和摘要 |
 | 显示重置时间 | `show_reset` | 例如 `（22:11 重置）` |
 | 额度显示为「剩余」 | `limit_style` | 关＝已用 6%，开＝剩余 94% |
@@ -363,28 +366,36 @@ kill_on_exit = true
 
 ---
 
-## 额度是从哪来的
+## 子 Agent 也会触发 notify
 
-事件 JSON 里没有额度信息。Codex 每次收尾会把快照写进会话日志：
+Codex 派出去的子 Agent、内部审查回合**结束时也会触发 notify**，但那时主任务还在跑，手机却先收到一条「干完了」。`only_main_agent = true`（默认）把这些挡掉，只在你自己的主会话结束时通知。
 
+难点是 **notify 事件 JSON 里没有父子标记**。查了 Codex 源码确认 `legacy_notify` 只塞了 `type / thread-id / turn-id / cwd / client / input-messages / last-assistant-message`，其中 `thread-id` 取自 `sess.thread_id` —— 即触发回合那个会话自己的 ID。子 Agent 是独立会话，所以可以拿它去查来源。
+
+Codex 会在 `~/.codex/sessions/年/月/日/rollout-...-<thread-id>.jsonl` 的第一行写 `session_meta`，里面有个 `thread_source`：
+
+| `thread_source` | 含义 | 处理 |
+|---|---|---|
+| `user` | 你发起的主会话 | 通知 |
+| `subagent` | 派出去的子 Agent（还带 `agent_path: /root/xxx`、昵称） | 跳过 |
+| `guardian_review` | 内部审查回合 | 跳过 |
+
+（`~/.codex/state_5.sqlite` 的 `threads.source` 记的是同一件事：`vscode` 是主会话，`{"subagent":...}` 是子 Agent。为读一张表给这个单文件程序塞进整个 SQLite 驱动不值得，所以走纯文本的会话日志。）
+
+**只拦自己这条消息，不拦转发。** 过滤放在 `chain` 之后 —— 桌宠该收到的事件一个都不能少。
+
+**查不到就照常通知。** `thread_source` 是 Codex 的内部实现细节，改版可能消失或改名；文件找不到、字段不认识、解析失败，一律按主会话放行。宁可多推一条，也不能把真正的「主 Agent 干完了」吞掉。`--test` / `--dry-run` 用假 thread-id，走的也是这条放行路径。
+
+想核对某个事件会被怎么处理：
+
+```bash
+codex-notify.exe --classify 01a1ba97-af78-7db1-9dbf-86c1b836aeb1
+# thread_source: subagent
+# 判定:         子 Agent / 内部回合
+# 结果:         会跳过通知
 ```
-~/.codex/sessions/2026/11/08/rollout-...-<thread-id>.jsonl
-```
 
-里面有一条 `payload.rate_limits`：
-
-```json
-{"primary":  {"used_percent":62.0,"window_minutes":300},
- "secondary":{"used_percent":18.0,"window_minutes":10080}}
-```
-
-`300` 分钟 = 5 小时窗口，`10080` 分钟 = 7 天。本程序按 `thread-id` 匹配到对应文件，**只读文件末尾 512 KB** 找最后一条记录，耗时 5–10 ms，不需要任何网络请求或凭据。
-
-快照里还带 `resets_at`（重置时刻），所以消息里能写「（22:11 重置）」「（下周日 09:56 重置）」这样的提示。
-
-**过期数据会被过滤掉。** 快照是 Codex 上次收尾时写的，如果那个窗口的重置时刻已经过去，说明额度早就回满了——此时再报「已用 99%」纯属误导，这一项会直接不显示。宁可少说，不说错话。
-
-注意：这里**只读** `~/.codex`，不会写入任何东西。不想要这块就设 `show_limits = false`。
+钩子每次运行还会在 `notify.log` 里留一行 `thread <id> → 主 Agent / 无法判定`，从事件 JSON 里复制 `thread-id` 就能用 `--classify` 复查。
 
 ---
 
@@ -398,20 +409,11 @@ kill_on_exit = true
 
 **桌宠不动了？** `chain` 没配。把原来那条 `codex-computer-use.exe turn-ended` 加回去。
 
-**想临时关掉？** 把 `[qq].target` 清空即可，不用删配置也不用改 `config.toml`。
+**想临时关掉？** 把 `enabled` 设为 `false`（托盘里取消勾选「启用通知」），或清空 `[qq].target` 即可，不用改 `config.toml`。
 
 **回合结束后感觉卡了一下？** 因为 Codex 会等这个进程退出。本机 NapCat 通常 5 ms 就返回，但如果你把 `base_url` 指向了远程地址，就会明显变慢。可以调小 `timeout_secs`。
 
-**消息会不会把代码发出去？** 不会。只发三样：工作目录的**最后一段**目录名、Codex 最后一条回复的前 `max_chars` 个字、以及额度百分比。不发完整路径、不发文件内容、不发你的输入。
-
----
-
-## 设计取舍
-
-- **不用异步运行时**：这是一次性进程，`ureq` 阻塞式发一个请求就够了，引入 tokio 只会让启动变慢、二进制变大。
-- **所有失败都静默**：配置解析失败、网络不通、NapCat 没开，一律只写日志并正常退出。钩子跑在 Codex 的收尾流程里，这里 panic 会让 Codex 报错，代价远大于少发一条通知。
-- **不往 stdout 写东西**：运行时输出会混进 Codex 的流里。除了人工命令，其余信息全部落文件。
-- **不碰 `~/.codex` 的写操作**：只读会话日志取额度。Codex 的配置目录里只留 `config.toml` 那一行 `notify`，那是它唯一的入口。
+**消息会不会把代码发出去？** 不会。发送的是项目名（工作目录最后一段）、完成时间、额度百分比，以及 Codex 最后一条回复的前 `max_chars` 个字；Codex 没输出文字时会退用你最后一条指令当摘要。不发完整路径，也不发文件内容。
 
 ---
 
@@ -420,23 +422,7 @@ kill_on_exit = true
 - 在 Windows 上开发和验证，代码本身是跨平台的，但其他平台未测试。
 - 依赖 NapCat 常驻。NapCat 退出、掉线，或者 QQ 自动更新导致注入失效，通知都会中断（`--check` 能看出来）。
 - NapCat 是第三方对 QQ 客户端的协议实现，属于灰色地带，账号有被风控的可能。请自行评估，建议用小号。
-
----
-
-## 图标
-
-`assets/` 里放着图标源文件：
-
-| 文件 | 用途 |
-|---|---|
-| `icon-1024.png` | 主图标（圆角方形） |
-| `icon-circle-512.png` | 圆形版本，README 顶部用的就是它 |
-| `codex-notify.ico` | 多尺寸 Windows 图标，由 `build.rs` 嵌进 exe |
-| `chevron-mono.svg` | 单色 chevron，给托盘/浅色背景用 |
-| `icon-sheet.png` | 设计说明：各种尺寸和配色的效果预览 |
-| `_build_icon.py` / `_build_ico.py` | 生成脚本，改完图形重新跑一遍即可（需要 Pillow） |
-
-图形语言很简单：深色圆角底 + 白色气泡（你收到的消息）+ 深色 chevron（终端提示符）+ 青色圆点（有新消息）。配色 `#1B2938` / `#F5FAFF` / `#2BD2FF`。
+- `only_main_agent` 依赖 Codex 会话日志里的 `thread_source` —— 这是内部字段，未写进官方文档。字段若变动，程序会自动退回「全部照常通知」（不会漏推，但可能又开始收到子 Agent 的推送），此时升级本程序或关掉该开关即可。
 
 ---
 
