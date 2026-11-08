@@ -5,7 +5,7 @@
 //! NapCat 不是单个进程。看它的启动脚本就知道：
 //!
 //! ```text
-//! launcher-user.bat → cmd → NapCatWinBootMain.exe → QQ.exe（+ 若干渲染/GPU 子进程）
+//! powershell.exe → cmd（解释 .bat）→ NapCatWinBootMain.exe → QQ.exe（+ 若干渲染/GPU 子进程）
 //! ```
 //!
 //! 想「退出时一起关掉」，逐个记 PID 再 kill 是不可靠的：子进程会漏、PID 会复用、
@@ -55,7 +55,7 @@ pub struct Managed {
 
 /// NapCat 把登录二维码写到 `<NapCat目录>/cache/qrcode.png`。
 ///
-/// 为什么需要这个：控制台里的二维码是字符画，cmd 的字体和编码经常
+/// 为什么需要这个：控制台里的二维码是字符画，终端字体和编码经常
 /// 渲染成乱码，根本扫不出来。而这张 PNG 是干净的 147×147 图片，
 /// 直接打开就能扫 —— 比纠结用哪个终端靠谱得多。
 ///
@@ -78,6 +78,40 @@ impl Drop for Managed {
     }
 }
 
+/// 把配置里的「程序 + 参数」拼成一段 PowerShell 命令。
+/// 单引号包住每个 token，内部的单引号写成两个（PowerShell 的转义规则）。
+fn powershell_script(command: &[String]) -> String {
+    let mut s = String::from("& ");
+    for (i, part) in command.iter().enumerate() {
+        if i > 0 {
+            s.push(' ');
+        }
+        s.push('\'');
+        s.push_str(&part.replace('\'', "''"));
+        s.push('\'');
+    }
+    s
+}
+
+fn spawn_via_powershell(command: &[String]) -> Result<std::process::Child, String> {
+    let mut c = Command::new("powershell.exe");
+    c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"])
+        .arg(powershell_script(command))
+        .creation_flags(CREATE_NEW_CONSOLE);
+    c.spawn().map_err(|e| e.to_string())
+}
+
+/// 兜底：机器上找不到 powershell.exe 时，回到原来的方式。
+fn spawn_via_cmd(command: &[String]) -> Result<std::process::Child, String> {
+    let mut c = Command::new("cmd");
+    c.arg("/c").arg(&command[0]);
+    for arg in &command[1..] {
+        c.arg(arg);
+    }
+    c.creation_flags(CREATE_NEW_CONSOLE);
+    c.spawn().map_err(|e| e.to_string())
+}
+
 /// 按配置里的命令启动 NapCat。
 ///
 /// `kill_on_exit = true` 时把它放进作业对象，本进程退出即连带结束；
@@ -87,19 +121,23 @@ pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, 
         return Err("没有配置 [napcat].command".to_string());
     }
 
-    let mut cmd = Command::new("cmd");
-    // .bat 必须经由 cmd 执行；/c 表示跑完就退出
-    cmd.arg("/c").arg(&command[0]);
-    for arg in &command[1..] {
-        cmd.arg(arg);
-    }
-    cmd.creation_flags(CREATE_NEW_CONSOLE);
+    // PowerShell 当外层宿主：窗口对 UTF-8 / 字符画更友好，.ps1 / .exe 也能用同一套调用。
+    // 注意 .bat 本质仍由系统隐式调 cmd.exe 解释，所以只是「外壳」换了，
+    // NapCat 脚本本身的内容和行为完全不变。
+    //
+    // 万一机器上找不到 powershell.exe（精简系统、PATH 被裁），退回原来的 cmd /c ——
+    // 不能因为换个窗口就让 NapCat 起不来。
+    let child = spawn_via_powershell(command)
+        .or_else(|e| {
+            log(&format!("PowerShell 启动失败（{e}），回退 cmd"));
+            spawn_via_cmd(command)
+        })
+        .map_err(|e| format!("启动失败: {e}"))?;
 
     // 不重定向 stdout/stderr：让它占着自己的控制台，和手动双击脚本完全一致。
     // 之前把输出倒进文件、顺便把 stdin 接到 null，结果 NapCat 引导器行为异常，
     // 得不偿失。想看输出就直接看它自己的窗口。
 
-    let child = cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
     let pid = child.id();
     log(&format!("已启动 NapCat pid={pid}"));
 
@@ -131,7 +169,7 @@ pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, 
             return Err("设置 Job Object 失败".to_string());
         }
 
-        // 把刚拉起的 cmd 放进去。它的子进程（NapCatWinBootMain、QQ）
+        // 把刚拉起的 PowerShell 放进去。它的子进程（cmd、NapCatWinBootMain、QQ）
         // 默认会继承这个作业，所以整棵树都在管控范围内。
         let proc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
         if proc.is_null() {
@@ -154,4 +192,21 @@ pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, 
 
     // 走到这里说明作业已建好、进程已放进去，把句柄带出去交给调用方持有
     Ok(Some(Managed { job }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn powershell_script_quotes_each_token() {
+        assert_eq!(
+            powershell_script(&[r"D:\tools\NapCat\launcher-user.bat".to_string()]),
+            r"& 'D:\tools\NapCat\launcher-user.bat'"
+        );
+        assert_eq!(
+            powershell_script(&["a b.bat".to_string(), "it's".to_string()]),
+            "& 'a b.bat' 'it''s'"
+        );
+    }
 }
