@@ -1,6 +1,6 @@
 [package]
 name = "codex-notify"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "Codex 的 notify 钩子：回合结束时把结果推到 QQ"
 
@@ -14,6 +14,19 @@ toml = "0.8"
 # 关掉默认特性：本程序只访问本机 NapCat 的 http 接口，用不到 TLS，
 # 这样能省掉 rustls/ring 这一大坨依赖，编译更快、二进制更小。
 ureq = { version = "2", default-features = false }
+
+# Windows 专属：托盘图标、控制台附着。
+# 用 windows-sys 而不是 windows crate —— 前者只提供 FFI 声明，不带封装层，
+# 编译更快、体积更小，正好适合我们这种只需要几个 API 的场景。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",      # WNDCLASSW 里的 hbrBackground 需要 HBRUSH
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 # 把 assets/codex-notify.ico 编译进 exe 的 Windows 资源段，
