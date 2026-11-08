@@ -105,9 +105,17 @@ fn main() {
 
     // 常驻托盘：跑起来就一直待着，直到用户在菜单里点「退出」
     #[cfg(windows)]
-    if flag == "--tray" {
-        tray::run(cfg);
-        return;
+    {
+        // 两种进入方式：显式 `--tray`，或者干脆双击 exe（一个参数都没有）。
+        // 后者才符合「默认在托盘」的直觉——双击一个 GUI 程序，
+        // 期望的是它安静地缩到右下角，而不是什么都不发生。
+        //
+        // 不会和钩子路径打架：Codex 调用时一定会带上事件 JSON，参数不为空。
+        let no_args = args.is_empty();
+        if flag == "--tray" || no_args {
+            tray::run(cfg);
+            return;
+        }
     }
 
     // 没有子命令 = 由 Codex 的 notify 钩子调用。
