@@ -61,6 +61,7 @@ const ID_CYCLE_MAX_CHARS: usize = 16;
 const ID_CYCLE_TIMEOUT: usize = 17;
 const ID_TOGGLE_MAIN_ONLY: usize = 18;
 const ID_CYCLE_SUMMARY: usize = 19;
+const ID_CYCLE_SHELL: usize = 20;
 
 /// 摘要长度的档位。菜单没法输数字，用「点一下换下一档」代替输入框。
 /// 260 是默认档；80 适合只想瞄一眼，600 基本是全文。
@@ -68,6 +69,7 @@ const MAX_CHARS_STEPS: [i64; 5] = [80, 160, 260, 400, 600];
 /// HTTP 超时的档位（秒）。本机 NapCat 通常 5ms 就返回，档位只影响最坏情况。
 const TIMEOUT_STEPS: [i64; 4] = [1, 3, 5, 10];
 const SUMMARY_SOURCES: [&str; 3] = ["thread", "message", "none"];
+const SHELL_STEPS: [&str; 3] = ["cmd", "pwsh", "pwsh7"];
 
 /// 由本程序启动的 NapCat。放在静态里是为了让菜单（窗口过程）也能访问。
 ///
@@ -209,7 +211,11 @@ pub fn run(cfg: Config) {
         //    已经在跑（端口能连上）说明是你手动开的，不认识也不去接管。
         if let Some(nc) = snapshot().napcat {
             if !nc.command.is_empty() && !napcat_online() {
-                start_napcat(&nc.command, nc.kill_on_exit);
+                start_napcat(
+                    &nc.command,
+                    nc.kill_on_exit,
+                    crate::napcat::parse_shell(&nc.shell),
+                );
             }
         }
 
@@ -497,6 +503,14 @@ unsafe fn show_menu(hwnd: HWND) {
         let timeout_w = wide(&timeout_label);
         AppendMenuW(sub, MF_STRING, ID_CYCLE_TIMEOUT, timeout_w.as_ptr());
 
+        let shell_now = cfg_now
+            .napcat
+            .as_ref()
+            .map(|n| n.shell.as_str())
+            .unwrap_or("pwsh");
+        let shell_w = wide(&format!("启动外壳：{shell_now}"));
+        AppendMenuW(sub, MF_STRING, ID_CYCLE_SHELL, shell_w.as_ptr());
+
         let kill_on = cfg_now.napcat.as_ref().is_some_and(|n| n.kill_on_exit);
         let kill_w = wide("退出托盘时一起关闭 NapCat");
         let flags = if kill_on {
@@ -540,7 +554,11 @@ unsafe fn show_menu(hwnd: HWND) {
         ID_OPEN_DIR => open_config_dir(),
         ID_START_NAPCAT => {
             if let Some(nc) = snapshot().napcat {
-                start_napcat(&nc.command, nc.kill_on_exit);
+                start_napcat(
+                    &nc.command,
+                    nc.kill_on_exit,
+                    crate::napcat::parse_shell(&nc.shell),
+                );
             }
         }
         ID_STOP_NAPCAT => stop_napcat(),
@@ -557,6 +575,11 @@ unsafe fn show_menu(hwnd: HWND) {
         ID_CYCLE_MAX_CHARS => cycle_int("max_chars", cfg_now.max_chars as i64, &MAX_CHARS_STEPS),
         ID_CYCLE_TIMEOUT => cycle_int("timeout_secs", cfg_now.timeout_secs as i64, &TIMEOUT_STEPS),
         ID_CYCLE_SUMMARY => cycle_str("summary_source", &cfg_now.summary_source, &SUMMARY_SOURCES),
+        ID_CYCLE_SHELL => cycle_str(
+            "napcat.shell",
+            cfg_now.napcat.as_ref().map(|n| n.shell.as_str()).unwrap_or("pwsh"),
+            &SHELL_STEPS,
+        ),
         ID_QUIT => {
             // 先删图标再关窗口：顺序反了会在托盘留下残影
             let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
@@ -636,6 +659,9 @@ fn cycle_str(key: &str, current: &str, steps: &[&str]) {
     if let Ok(mut c) = cfg().write() {
         match key {
             "summary_source" => c.summary_source = next.to_string(),
+            "napcat.shell" => {
+                c.napcat.get_or_insert_with(Default::default).shell = next.to_string();
+            }
             _ => {}
         }
     }
@@ -675,12 +701,12 @@ fn send_test() {
 ///
 /// 已经在托管中就不重复启动（防止连点两下菜单开出两个 QQ），
 /// 但**必须记一笔日志** —— 静默返回会让人以为菜单坏了。
-fn start_napcat(command: &[String], kill_on_exit: bool) {
+fn start_napcat(command: &[String], kill_on_exit: bool, shell: crate::napcat::Shell) {
     if napcat_managed() {
         crate::logfile::log("NapCat 已在托管中，忽略这次启动请求");
         return;
     }
-    match crate::napcat::start(command, kill_on_exit) {
+    match crate::napcat::start(command, kill_on_exit, shell) {
         Ok(started) => match started.managed {
             Some(guard) => {
                 if let Ok(mut g) = GUARD.lock() {
@@ -688,12 +714,15 @@ fn start_napcat(command: &[String], kill_on_exit: bool) {
                 }
                 crate::logfile::log("NapCat 已纳入托管，退出托盘时会一起结束");
 
-                // pwsh 7 控制台默认 UTF-8，字符画二维码直接看窗口就行，不再弹图片。
-                // 只有没装 pwsh 7、回退到 cmd 时才需要（cmd 的字符画容易乱码）。
-                if started.used_pwsh {
-                    crate::logfile::log("pwsh 7 启动：二维码看控制台，不弹图片");
-                } else {
+                // 弹不弹图由实际外壳决定：pwsh（5.1）不弹，cmd / pwsh7 都弹。
+                // 用实际值而不是配置值 —— 降级到 cmd 时应该照样弹图。
+                if started.used.should_pop_qrcode() {
                     watch_qrcode(command);
+                } else {
+                    crate::logfile::log(&format!(
+                        "{} 启动：二维码看控制台，不弹图片",
+                        started.used.label()
+                    ));
                 }
             }
             None => {
