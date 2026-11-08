@@ -1,0 +1,11 @@
+# 统一换行符：仓库里一律用 LF，避免 Windows/Linux 之间产生「整文件改动」的噪音 diff
+* text=auto eol=lf
+
+# 这几类文件必须保留 CRLF，否则在 Windows 上可能无法直接执行
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不要做换行转换
+*.exe binary
+*.png binary
+*.jpg binary
