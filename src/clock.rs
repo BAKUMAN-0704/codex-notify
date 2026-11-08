@@ -44,6 +44,52 @@ pub fn hhmm() -> String {
     format!("{h:02}:{mi:02}")
 }
 
+/// 当前的 Unix 时间戳（秒）。用来和额度里的 `resets_at` 做比较。
+pub fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// 把额度重置时刻格式化成「18:20」「明天 03:00」「周四 09:00」。
+///
+/// 三档是有意分开的，因为读的人当下只关心「还有多久」：
+///   - 今天：只要时分，一眼就知道几点回满
+///   - 明天：加个「明天」，避免误以为是今天
+///   - 更远：带星期几（周窗口通常跨好几天）
+///
+/// `now_secs` 作为参数传入而不是内部取，方便测试时构造固定时刻。
+pub fn reset_label(resets_at: i64, now_secs: i64) -> String {
+    let tz = TZ_OFFSET_SECS as i64;
+
+    // 转成本地时间的「第几天」和「当天第几秒」
+    let local = resets_at + tz;
+    let days = local.div_euclid(86_400);
+    let rem = local.rem_euclid(86_400);
+    let time = format!("{:02}:{:02}", rem / 3600, (rem % 3600) / 60);
+
+    let now_days = (now_secs + tz).div_euclid(86_400);
+    let delta = days - now_days;
+    match delta {
+        0 => time,
+        1 => format!("明天 {time}"),
+        _ => {
+            // 1970-01-01 是周四，所以 +4 再对 7 取模就得到星期索引（0 = 周日）
+            const NAMES: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+            let weekday = (days + 4).rem_euclid(7) as usize;
+
+            // 正好七天后是同一个星期几。不加区分的话，
+            // 在周日当天会显示「周日 09:56 重置」，读起来像今天
+            if delta == 7 {
+                format!("下{} {time}", NAMES[weekday])
+            } else {
+                format!("{} {time}", NAMES[weekday])
+            }
+        }
+    }
+}
+
 /// 把「1970-01-01 以来的天数」换算成 `(年, 月, 日)`。
 ///
 /// 算法思路（Howard Hinnant 的 civil_from_days）：

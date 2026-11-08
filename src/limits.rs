@@ -37,6 +37,10 @@ pub struct Limits {
     pub five_hour: f64,
     /// 周窗口已用百分比（0~100）
     pub weekly: f64,
+    /// 5 小时窗口的重置时刻（Unix 秒）。日志里没这个字段时为空。
+    pub five_hour_resets_at: Option<i64>,
+    /// 周窗口的重置时刻（Unix 秒）
+    pub weekly_resets_at: Option<i64>,
 }
 
 /// Codex 的配置目录。只用于**读取**会话日志。
@@ -143,10 +147,21 @@ fn limits_from_tail(path: &PathBuf) -> Option<Limits> {
                 .and_then(|w| w.get("used_percent"))
                 .and_then(Value::as_f64)
         };
+        // resets_at 是 Unix 秒。不同版本可能没有，缺失就当没有重置信息
+        let resets = |key: &str| {
+            rl.get(key)
+                .and_then(|w| w.get("resets_at"))
+                .and_then(Value::as_i64)
+        };
 
         // 两个窗口都要有才返回：只显示一个的话，容易让人误解成「只剩这个额度」
         if let (Some(five_hour), Some(weekly)) = (pct("primary"), pct("secondary")) {
-            return Some(Limits { five_hour, weekly });
+            return Some(Limits {
+                five_hour,
+                weekly,
+                five_hour_resets_at: resets("primary"),
+                weekly_resets_at: resets("secondary"),
+            });
         }
     }
     None

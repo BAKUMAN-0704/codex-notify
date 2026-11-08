@@ -98,6 +98,16 @@ fn main() {
         _ => {}
     }
 
+    // --set key=value：改完就走，不需要读配置。
+    // 值在 --set 的下一个参数里，单独拆开找，避免和事件 JSON 混淆。
+    if flag == "--set" {
+        match args.iter().position(|a| a == "--set").and_then(|i| args.get(i + 1)) {
+            Some(pair) => cli::set(pair),
+            None => println!("--set 需要一个 key=value 参数，例如 --set show_limits=false"),
+        }
+        return;
+    }
+
     let cfg = Config::load();
 
     if flag == "--check" {

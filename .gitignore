@@ -8,6 +8,9 @@
 # 运行时数据：日志里有本地路径和发送目标
 /notify.log
 /notify.log.1
+# NapCat 启动器的输出（含本机路径、注册表探测结果），同样不入库
+/napcat.log
+/napcat.log.*
 
 # 真实配置：含 OneBot access_token 和你的 QQ 号，绝不能入库。
 # 仓库里提供的是 notify.example.toml，首次使用跑一次 --init 或手工复制。

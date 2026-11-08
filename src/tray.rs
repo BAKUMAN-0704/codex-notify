@@ -28,14 +28,15 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::{
     ExtractIconExW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NOTIFYICONDATAW,
+    NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadCursorW, PostQuitMessage,
-    RegisterClassW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, IDC_ARROW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, KillTimer, LoadCursorW,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TrackPopupMenu, TranslateMessage,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
+    SM_CXSMICON, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
+    WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::config::Config;
@@ -48,6 +49,22 @@ const ID_TEST: usize = 1;
 const ID_OPEN_DIR: usize = 2;
 const ID_QUIT: usize = 3;
 const ID_START_NAPCAT: usize = 4;
+const ID_STOP_NAPCAT: usize = 5;
+// 设置子菜单里的勾选项
+const ID_TOGGLE_LIMITS: usize = 10;
+const ID_TOGGLE_RESET: usize = 11;
+const ID_TOGGLE_REMAINING: usize = 12;
+const ID_TOGGLE_FOOTER: usize = 13;
+const ID_TOGGLE_ENABLED: usize = 14;
+const ID_TOGGLE_KILL_EXIT: usize = 15;
+const ID_CYCLE_MAX_CHARS: usize = 16;
+const ID_CYCLE_TIMEOUT: usize = 17;
+
+/// 摘要长度的档位。菜单没法输数字，用「点一下换下一档」代替输入框。
+/// 260 是默认档；80 适合只想瞄一眼，600 基本是全文。
+const MAX_CHARS_STEPS: [i64; 5] = [80, 160, 260, 400, 600];
+/// HTTP 超时的档位（秒）。本机 NapCat 通常 5ms 就返回，档位只影响最坏情况。
+const TIMEOUT_STEPS: [i64; 4] = [1, 3, 5, 10];
 
 /// 由本程序启动的 NapCat。放在静态里是为了让菜单（窗口过程）也能访问。
 ///
@@ -86,15 +103,33 @@ pub fn ensure_console() {
     }
 }
 
-/// 托盘模式会用到的那份配置，放在静态变量里供窗口过程访问。
+/// 托盘模式会用到的那份配置。
 ///
-/// 用 `OnceLock` 而不是全局可变静态：配置在启动时读一次就不变了，
-/// 窗口过程只读不写，天然线程安全。
-static CFG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+/// 用 `OnceLock<RwLock<Config>>` 而不是 `OnceLock<Config>`：
+/// 右键菜单里的「设置」要能改它 —— 勾一下立刻生效，不用重启托盘。
+static CFG: std::sync::OnceLock<std::sync::RwLock<Config>> = std::sync::OnceLock::new();
+
+/// 取配置的快捷方式。`run()` 一开始就初始化好了，所以这里不会失败。
+fn cfg() -> &'static std::sync::RwLock<Config> {
+    CFG.get().expect("配置应在 run() 开头初始化")
+}
+
+/// 取一份配置副本。
+///
+/// 为什么不直接持有读锁往下传：`std::sync::RwLock` 在 Windows 上用的是
+/// SRW 锁，同线程递归获取读锁可能死锁。而这些函数内部还会再调
+/// `napcat_online()` 之类的辅助函数（它们也要读配置），
+/// 所以统一「先克隆、立刻放锁」，把锁的生命周期压到最短。
+fn snapshot() -> Config {
+    cfg()
+        .read()
+        .map(|c| c.clone())
+        .unwrap_or_else(|_| Config::fallback())
+}
 
 /// 进入托盘模式，直到用户点「退出」才返回。
 pub fn run(cfg: Config) {
-    let _ = CFG.set(cfg);
+    let _ = CFG.set(std::sync::RwLock::new(cfg));
 
     unsafe {
         let module = GetModuleHandleW(std::ptr::null());
@@ -160,15 +195,22 @@ pub fn run(cfg: Config) {
 
         crate::logfile::log("托盘已启动");
 
-        // 4. 如果配了 NapCat 且它没在跑，就顺带拉起来。
+        // 4. 定时刷新托盘提示文字。
+        //    之前只在创建图标时写一次，结果永远显示启动那一刻的状态
+        //    （"未运行"），鼠标移上去看到的就是过期信息。
+        //    5 秒一次：状态判断要跑 tasklist，太频繁没必要。
+        const TIMER_REFRESH: usize = 1;
+        SetTimer(hwnd, TIMER_REFRESH, 5000, None);
+
+        // 5. 如果配了 NapCat 且它没在跑，就顺带拉起来。
         //    已经在跑（端口能连上）说明是你手动开的，不认识也不去接管。
-        if let Some(nc) = CFG.get().and_then(|c| c.napcat.as_ref()) {
+        if let Some(nc) = snapshot().napcat {
             if !nc.command.is_empty() && !napcat_online() {
-                start_napcat(nc);
+                start_napcat(&nc.command, nc.kill_on_exit);
             }
         }
 
-        // 5. 标准消息循环。GetMessageW 返回 0 表示收到 WM_QUIT
+        // 6. 标准消息循环。GetMessageW 返回 0 表示收到 WM_QUIT
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
@@ -177,6 +219,7 @@ pub fn run(cfg: Config) {
 
         // 6. 收尾。先结束托管的 NapCat（关 Job 句柄 → 整棵树一起走），
         //    再删托盘图标，否则鼠标划过托盘会留下一个「幽灵图标」。
+        KillTimer(hwnd, TIMER_REFRESH);
         if let Ok(mut g) = GUARD.lock() {
             if g.take().is_some() {
                 crate::logfile::log("已结束托管的 NapCat");
@@ -187,6 +230,20 @@ pub fn run(cfg: Config) {
     }
 }
 
+/// 刷新托盘提示文字。
+///
+/// 只带 `NIF_TIP` 调 `NIM_MODIFY`，其他字段不动 —— 这样图标和回调消息
+/// 都不会被重置，改的只有鼠标悬停时显示的那句话。
+unsafe fn refresh_tip(hwnd: HWND) {
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_TIP;
+    write_tip(&mut nid, &tip_text());
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 /// 把提示文字写进 NOTIFYICONDATAW 的定长缓冲区（最多 127 个 UTF-16 码元）
 fn write_tip(nid: &mut NOTIFYICONDATAW, text: &str) {
     let mut buf: Vec<u16> = text.encode_utf16().take(127).collect();
@@ -194,13 +251,54 @@ fn write_tip(nid: &mut NOTIFYICONDATAW, text: &str) {
     nid.szTip[..buf.len()].copy_from_slice(&buf);
 }
 
-/// 取当前状态的提示文字：顺带当作「NapCat 在不在」的体检
-fn tip_text() -> String {
+/// 菜单里那句灰色状态文字。
+///
+/// 三层判断，缺一层就会误导：
+///   1. 端口通      → 真的登录好了，能发消息
+///   2. 进程在但端口不通 → NapCat 起来了、卡在扫码登录。**不是"未运行"**
+///   3. 都没有      → 确实没跑
+fn status_text() -> &'static str {
     if napcat_online() {
-        "codex-notify · NapCat 在线".to_string()
+        "状态：NapCat 在线"
+    } else if napcat_managed() || napcat_process_alive() {
+        "状态：NapCat 已启动，等待扫码登录"
     } else {
-        "codex-notify · NapCat 未连接".to_string()
+        "状态：NapCat 未运行"
     }
+}
+
+/// NapCat 的引导进程是否还活着。
+///
+/// 为什么不复用端口判断：未登录时 OneBot 的 HTTP 服务根本不启动，
+/// 端口一定是关的。用户看到 QQ 窗口在，托盘却说"未运行"，就会觉得坏了。
+fn napcat_process_alive() -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    std::process::Command::new("tasklist")
+        .args([
+            "/FI",
+            "IMAGENAME eq NapCatWinBootMain.exe",
+            "/NH",
+            "/FO",
+            "CSV",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout).contains("NapCatWinBootMain.exe")
+        })
+        .unwrap_or(false)
+}
+
+/// 当前是否持有托管句柄（不管端口通不通）
+fn napcat_managed() -> bool {
+    GUARD.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
+/// 鼠标悬停在托盘图标上时的提示
+fn tip_text() -> String {
+    format!("codex-notify · {}", status_text().trim_start_matches("状态："))
 }
 
 /// 判断 NapCat 是否在监听。
@@ -208,10 +306,9 @@ fn tip_text() -> String {
 /// 只做一次 TCP 连接试探，超时 300ms —— 菜单点开要立刻响应，
 /// 不能在这里发 HTTP 请求（NapCat 没开时要等满 5 秒，界面会卡住）。
 fn napcat_online() -> bool {
-    let base = CFG
-        .get()
-        .and_then(|c| c.qq.as_ref())
-        .map(|q| q.base_url.clone())
+    let base = snapshot()
+        .qq
+        .map(|q| q.base_url)
         .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
 
     // 从 http://host:port 里抠出 host 和 port，抠不出来就按默认值试
@@ -268,6 +365,12 @@ unsafe extern "system" fn wndproc(
             }
             0
         }
+        // 定时刷新提示文字。菜单里那句状态是每次右键现算的，
+        // 但鼠标悬停的 tooltip 不会自己变，只能靠这个定时器推。
+        WM_TIMER => {
+            refresh_tip(hwnd);
+            0
+        }
         WM_DESTROY => {
             PostQuitMessage(0);
             0
@@ -283,43 +386,113 @@ unsafe fn show_menu(hwnd: HWND) {
         return;
     }
 
+    // 先把配置拷一份出来：菜单项多，逐个读锁既啰嗦又容易在
+    // 调用其他函数（它们也要读配置）时踩到递归读锁
+    let cfg_now = snapshot();
+
     // 第一项是不可点的状态文字，纯粹给人看
-    let status = if napcat_online() {
-        "状态：NapCat 在线"
-    } else {
-        "状态：NapCat 未连接"
-    };
-    let status_w = wide(status);
+    let status_w = wide(status_text());
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status_w.as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
-    // 只有配了 napcat.command 才显示这一项；已经在跑就置灰（说明是手动开的，我们不管）
-    let has_napcat_cfg = CFG
-        .get()
-        .and_then(|c| c.napcat.as_ref())
-        .is_some_and(|n| !n.command.is_empty());
-    if has_napcat_cfg {
-        let running = napcat_online();
-        let label = if running {
-            "NapCat 已在运行"
+    // NapCat 那项分三种情况，不能只看端口：
+    //   托管中  → 给「停止」按钮（卡在扫码时能自救）
+    //   在线但非本程序启动 → 置灰说明，避免点了没反应
+    //   都没有  → 「启动」
+    if cfg_now
+        .napcat
+        .as_ref()
+        .is_some_and(|n| !n.command.is_empty())
+    {
+        let (label, id, grayed) = if napcat_managed() {
+            ("停止 NapCat", ID_STOP_NAPCAT, false)
+        } else if napcat_online() {
+            ("NapCat 已在运行（非本程序启动）", 0, true)
         } else {
-            "启动 NapCat"
+            ("启动 NapCat", ID_START_NAPCAT, false)
         };
+
         let w = wide(label);
-        let flags = if running {
+        let flags = if grayed {
             MF_STRING | MF_GRAYED
         } else {
             MF_STRING
         };
-        AppendMenuW(menu, flags, ID_START_NAPCAT, w.as_ptr());
+        AppendMenuW(menu, flags, id, w.as_ptr());
     }
 
     let test_w = wide("发送测试消息");
     let open_w = wide("打开配置目录");
-    let quit_w = wide("退出");
     AppendMenuW(menu, MF_STRING, ID_TEST, test_w.as_ptr());
     AppendMenuW(menu, MF_STRING, ID_OPEN_DIR, open_w.as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+
+    // ---- 设置子菜单 ----
+    // 勾选状态每次都按当前配置重建，所以点完立刻能看到变化。
+    // 勾选后会同时改内存和 notify.toml（toml_edit 保留注释）。
+    //
+    // 文本/路径类的配置（prefix、chain、QQ 账号、NapCat 路径）
+    // 没法在菜单里输入，统一走上面的「打开配置目录」。
+    let sub = CreatePopupMenu();
+    if !sub.is_null() {
+        // 第一组：总开关
+        let enabled_w = wide("启用通知");
+        let flags = if cfg_now.enabled {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(sub, flags, ID_TOGGLE_ENABLED, enabled_w.as_ptr());
+        AppendMenuW(sub, MF_SEPARATOR, 0, std::ptr::null());
+
+        // 第二组：显示相关
+        let items: [(usize, &str, bool); 4] = [
+            (ID_TOGGLE_LIMITS, "显示额度", cfg_now.show_limits),
+            (ID_TOGGLE_RESET, "显示重置时间", cfg_now.show_reset),
+            (
+                ID_TOGGLE_REMAINING,
+                "额度显示为「剩余」",
+                cfg_now.limit_style.eq_ignore_ascii_case("remaining"),
+            ),
+            (ID_TOGGLE_FOOTER, "显示会话标记 turn/thread", cfg_now.show_footer),
+        ];
+        for (id, label, on) in items {
+            let w = wide(label);
+            let flags = if on {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            AppendMenuW(sub, flags, id, w.as_ptr());
+        }
+        AppendMenuW(sub, MF_SEPARATOR, 0, std::ptr::null());
+
+        // 第三组：数值档位。标签里带当前值，点一下切到下一档
+        let max_label = format!("摘要长度：{} 字", cfg_now.max_chars);
+        let max_w = wide(&max_label);
+        AppendMenuW(sub, MF_STRING, ID_CYCLE_MAX_CHARS, max_w.as_ptr());
+
+        let timeout_label = format!("HTTP 超时：{} 秒", cfg_now.timeout_secs);
+        let timeout_w = wide(&timeout_label);
+        AppendMenuW(sub, MF_STRING, ID_CYCLE_TIMEOUT, timeout_w.as_ptr());
+
+        let kill_on = cfg_now.napcat.as_ref().is_some_and(|n| n.kill_on_exit);
+        let kill_w = wide("退出托盘时一起关闭 NapCat");
+        let flags = if kill_on {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(sub, flags, ID_TOGGLE_KILL_EXIT, kill_w.as_ptr());
+
+        // MF_POPUP：这一项本身不点，展开成子菜单。
+        // 句柄按整数传，第三个参数就是子菜单的 HMENU。
+        let set_w = wide("设置");
+        AppendMenuW(menu, MF_POPUP, sub as usize, set_w.as_ptr());
+    }
+
+    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+    let quit_w = wide("退出");
     AppendMenuW(menu, MF_STRING, ID_QUIT, quit_w.as_ptr());
 
     // 弹出菜单必须先把焦点抢过来，否则点空白处菜单不会消失
@@ -337,21 +510,33 @@ unsafe fn show_menu(hwnd: HWND) {
         std::ptr::null(),
     ) as usize;
 
-    // 菜单用完要销毁，否则每次右键都漏一个菜单句柄
+    // 菜单用完要销毁，否则每次右键都漏一个菜单句柄。
+    // 子菜单挂在父菜单上，DestroyMenu 父级会一并销毁，不用单独处理。
     DestroyMenu(menu);
 
     match cmd {
         ID_TEST => send_test(),
         ID_OPEN_DIR => open_config_dir(),
         ID_START_NAPCAT => {
-            if let Some(nc) = CFG.get().and_then(|c| c.napcat.as_ref()) {
-                start_napcat(nc);
+            if let Some(nc) = snapshot().napcat {
+                start_napcat(&nc.command, nc.kill_on_exit);
             }
         }
+        ID_STOP_NAPCAT => stop_napcat(),
+        ID_TOGGLE_LIMITS => toggle_bool("show_limits", cfg_now.show_limits),
+        ID_TOGGLE_RESET => toggle_bool("show_reset", cfg_now.show_reset),
+        ID_TOGGLE_FOOTER => toggle_bool("show_footer", cfg_now.show_footer),
+        ID_TOGGLE_REMAINING => toggle_limit_style(),
+        ID_TOGGLE_ENABLED => toggle_bool("enabled", cfg_now.enabled),
+        ID_TOGGLE_KILL_EXIT => {
+            let on = cfg_now.napcat.as_ref().is_some_and(|n| n.kill_on_exit);
+            toggle_bool("napcat.kill_on_exit", on);
+        }
+        ID_CYCLE_MAX_CHARS => cycle_int("max_chars", cfg_now.max_chars as i64, &MAX_CHARS_STEPS),
+        ID_CYCLE_TIMEOUT => cycle_int("timeout_secs", cfg_now.timeout_secs as i64, &TIMEOUT_STEPS),
         ID_QUIT => {
             // 先删图标再关窗口：顺序反了会在托盘留下残影
-            // 该结构体没有 Default 实现，直接清零（所有字段的零值都是合法初始状态）
-        let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+            let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
             nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
             nid.hWnd = hwnd;
             nid.uID = 1;
@@ -362,28 +547,103 @@ unsafe fn show_menu(hwnd: HWND) {
     }
 }
 
+/// 翻转一个布尔设置：先改内存（立刻生效），再写回文件（下次启动还在）。
+///
+/// `key` 支持点路径（如 `napcat.kill_on_exit`），和文件里的位置对应。
+/// 落盘失败只记日志 —— 内存里已经改了，这次运行期间照常工作，
+/// 只是重启后会回到旧值。没必要因为这个弹窗打断用户。
+fn toggle_bool(key: &str, current: bool) {
+    let new = !current;
+
+    if let Ok(mut c) = cfg().write() {
+        match key {
+            "enabled" => c.enabled = new,
+            "show_limits" => c.show_limits = new,
+            "show_reset" => c.show_reset = new,
+            "show_footer" => c.show_footer = new,
+            // kill_on_exit 在嵌套表里；表不存在就先建一份默认的，
+            // 否则「勾了但文件里没有 [napcat] 段」会静默丢失
+            "napcat.kill_on_exit" => {
+                c.napcat.get_or_insert_with(Default::default).kill_on_exit = new;
+            }
+            _ => {}
+        }
+    }
+
+    match crate::config::save_bool(key, new) {
+        Ok(()) => crate::logfile::log(&format!("设置 {key} = {new}")),
+        Err(e) => crate::logfile::log(&format!("保存 {key} 失败: {e}")),
+    }
+}
+
+/// 数值档位循环：菜单没法输入数字，点一下切到下一档。
+///
+/// 当前值不在档位表里（比如用户手写了 130）时，
+/// 跳回第一档 —— 比报错或原地不动都好，至少行为可预期。
+fn cycle_int(key: &str, current: i64, steps: &[i64]) {
+    let next = steps
+        .iter()
+        .position(|&v| v == current)
+        .map(|i| steps[(i + 1) % steps.len()])
+        .unwrap_or(steps[0]);
+
+    if let Ok(mut c) = cfg().write() {
+        match key {
+            "max_chars" => c.max_chars = next.max(1) as usize,
+            "timeout_secs" => c.timeout_secs = next.max(1) as u64,
+            _ => {}
+        }
+    }
+
+    match crate::config::save_int(key, next) {
+        Ok(()) => crate::logfile::log(&format!("设置 {key} = {next}")),
+        Err(e) => crate::logfile::log(&format!("保存 {key} 失败: {e}")),
+    }
+}
+
+/// 在「已用 / 剩余」之间切换额度口径
+fn toggle_limit_style() {
+    let remaining = snapshot()
+        .limit_style
+        .eq_ignore_ascii_case("remaining");
+    let new = if remaining { "used" } else { "remaining" };
+
+    if let Ok(mut c) = cfg().write() {
+        c.limit_style = new.to_string();
+    }
+
+    match crate::config::save_str("limit_style", new) {
+        Ok(()) => crate::logfile::log(&format!("设置 limit_style = {new}")),
+        Err(e) => crate::logfile::log(&format!("保存 limit_style 失败: {e}")),
+    }
+}
+
 /// 托盘菜单里的「发送测试消息」：走和 `--test` 完全一样的路径
 fn send_test() {
-    let Some(cfg) = CFG.get() else { return };
+    let cfg_now = snapshot();
     let event = crate::event::test_event();
-    let msg = crate::message::compose(&event, cfg);
-    crate::deliver(cfg, &msg, &event.cwd);
+    let msg = crate::message::compose(&event, &cfg_now);
+    crate::deliver(&cfg_now, &msg, &event.cwd);
 }
 
 /// 拉起 NapCat 并接管它的生命周期。
 ///
-/// 已经在托管中就不重复启动（防止连点两下菜单开出两个 QQ）。
-fn start_napcat(nc: &crate::config::Napcat) {
-    // 已经有一个在托管，直接忽略
-    if GUARD.lock().map(|g| g.is_some()).unwrap_or(false) {
+/// 已经在托管中就不重复启动（防止连点两下菜单开出两个 QQ），
+/// 但**必须记一笔日志** —— 静默返回会让人以为菜单坏了。
+fn start_napcat(command: &[String], kill_on_exit: bool) {
+    if napcat_managed() {
+        crate::logfile::log("NapCat 已在托管中，忽略这次启动请求");
         return;
     }
-    match crate::napcat::start(&nc.command, nc.kill_on_exit) {
+    match crate::napcat::start(command, kill_on_exit) {
         Ok(Some(guard)) => {
             if let Ok(mut g) = GUARD.lock() {
                 *g = Some(guard);
             }
             crate::logfile::log("NapCat 已纳入托管，退出托盘时会一起结束");
+            // 起个后台线程盯二维码：控制台里的字符画经常是乱码，
+            // 从 cache/qrcode.png 打开图片扫码更可靠
+            watch_qrcode(command);
         }
         Ok(None) => {
             // kill_on_exit = false，或者加不进 Job：进程已在跑，只是不归我们管
@@ -391,6 +651,60 @@ fn start_napcat(nc: &crate::config::Napcat) {
         }
         Err(e) => crate::logfile::log(&format!("NapCat 启动失败: {e}")),
     }
+}
+
+/// 手动停止托管的 NapCat：把句柄丢掉即可，Job 关闭会带走整棵进程树。
+///
+/// 主要给「卡在扫码登录」的情况用 —— 否则用户只能靠退出整个托盘来脱身。
+fn stop_napcat() {
+    if let Ok(mut g) = GUARD.lock() {
+        if g.take().is_some() {
+            crate::logfile::log("已手动停止 NapCat");
+        }
+    }
+}
+
+/// 盯着 NapCat 的登录二维码，出了新的就自动弹出来。
+///
+/// 只在托盘自己启动 NapCat 之后调用。最多看 5 分钟、最多弹 3 次 ——
+/// 二维码过期时 NapCat 会重写这个文件，所以能覆盖"扫慢了要重扫"的情况，
+/// 但不会无限弹窗。
+fn watch_qrcode(command: &[String]) {
+    let Some(path) = crate::napcat::qrcode_path(command) else {
+        return;
+    };
+    let started = std::time::SystemTime::now();
+
+    std::thread::spawn(move || {
+        let mut last: Option<std::time::SystemTime> = None;
+        let mut opened = 0;
+
+        // 150 次 × 2 秒 = 5 分钟，足够走完"扫码 → 手机确认"。
+        for _ in 0..150 {
+            std::thread::sleep(Duration::from_secs(2));
+
+            // 登录成功后就不用再弹了
+            if napcat_online() {
+                break;
+            }
+
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else { continue };
+
+            // 只要本次启动之后生成的那张，且没弹过
+            if mtime >= started && last != Some(mtime) && opened < 3 {
+                last = Some(mtime);
+                opened += 1;
+                // explorer 会用系统默认看图程序打开它
+                let _ = std::process::Command::new("explorer")
+                    .arg(path.as_os_str())
+                    .spawn();
+                crate::logfile::log(&format!("已弹出登录二维码: {}", path.display()));
+            }
+        }
+    });
 }
 
 /// 用资源管理器打开配置文件所在目录

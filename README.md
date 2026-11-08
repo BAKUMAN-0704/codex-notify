@@ -261,11 +261,15 @@ token:    (已设置)
 | `timeout_secs` | `5` | HTTP 超时。这个值决定回合结束后最多卡多久 |
 | `prefix` | `"[Codex]"` | 消息标题前缀 |
 | `show_limits` | `true` | 是否带 5h / 周额度 |
+| `show_reset` | `true` | 额度后面是否带「什么时候重置」 |
+| `limit_style` | `"used"` | `"used"` 显示已用百分比，`"remaining"` 显示剩余百分比 |
 | `show_footer` | `false` | 是否带末尾的 `(turn N · thread XXXXXXXX)`，多会话并行时才建议开 |
 | `chain` | `[]` | 链式转发的原 notify 命令（数组，第一个元素是程序路径） |
 | `[qq].base_url` | `http://127.0.0.1:3000` | NapCat 的 HTTP 服务地址 |
 | `[qq].access_token` | `""` | OneBot 鉴权 token，空则不带头 |
 | `[qq].target` | — | `private:QQ号` 或 `group:群号` |
+| `[napcat].command` | `[]` | 托盘要拉起的 NapCat 启动命令，留空则不托管 |
+| `[napcat].kill_on_exit` | `true` | 托盘退出时是否一起结束 NapCat |
 
 ---
 
@@ -276,6 +280,7 @@ token:    (已设置)
 | `codex-notify.exe '<JSON>'` | 由 Codex 调用，正常路径 |
 | `--tray` | 常驻托盘，右键可看状态 / 发测试 / 打开配置 / 退出（仅 Windows） |
 | `--test` | 用一条假事件真发一条，验证整条链路 |
+| `--set key=value` | 改一项配置并写回（`--set show_limits=false`），和托盘设置菜单同一条路径 |
 | `--dry-run` | 只打印将要发送的内容，不发请求 |
 | `--check` | 检查配置解析 + 探测 NapCat 连通性 |
 | `--init` | 生成默认配置（已存在不覆盖） |
@@ -301,10 +306,36 @@ D:\tools\codex-notify\codex-notify.exe --tray
 
 | 菜单项 | 作用 |
 |---|---|
-| 状态 | 显示 `NapCat 在线` / `NapCat 未连接`。每次右键现查，只做 300ms 的 TCP 探测，不会卡住菜单 |
+| 状态 | 显示 `NapCat 在线` / `NapCat 已启动，等待扫码登录` / `NapCat 未运行`。每 5 秒自动刷新 |
+| 启动 / 停止 NapCat | 托管中给「停止」，未运行时给「启动」；别人手动开的会置灰说明 |
 | 发送测试消息 | 等同于 `--test` |
 | 打开配置目录 | 用资源管理器打开 `notify.toml` 所在目录 |
+| **设置** ▸ | 勾选框，点一下立刻生效并写回 `notify.toml` |
 | 退出 | 删掉托盘图标并结束进程（不删图标会留下「幽灵图标」） |
+
+「设置」子菜单覆盖了所有能安全用菜单改的配置，点一下立刻生效并写回 `notify.toml`：
+
+| 菜单项 | 配置项 | 说明 |
+|---|---|---|
+| 启用通知 | `enabled` | 总开关，关掉后钩子静默退出 |
+| 显示额度 | `show_limits` | 关掉后消息里只剩时间和摘要 |
+| 显示重置时间 | `show_reset` | 例如 `（22:11 重置）` |
+| 额度显示为「剩余」 | `limit_style` | 关＝已用 6%，开＝剩余 94% |
+| 显示会话标记 turn/thread | `show_footer` | 多会话并行时才需要 |
+| 摘要长度：N 字 | `max_chars` | 点击循环 80 → 160 → 260 → 400 → 600 |
+| HTTP 超时：N 秒 | `timeout_secs` | 点击循环 1 → 3 → 5 → 10 |
+| 退出托盘时一起关闭 NapCat | `[napcat].kill_on_exit` | 只作用于托盘自己启动的那个 |
+
+**没进菜单的是文本和路径类**：`prefix`（前缀）、`chain`（转发命令）、`[qq]` 的地址/账号、`[napcat].command`——菜单没法输入这些，用上面的「打开配置目录」编辑文件。改完不用重启，下一次通知就按新配置走。
+
+写回用的是 `toml_edit`，**会保留你手写的注释和排版**，只改被点的那一项，其他行一个字节不动。
+
+命令行也能改，和菜单走同一条写回路径（方便脚本化）：
+
+```bash
+codex-notify.exe --set show_limits=false
+codex-notify.exe --set napcat.kill_on_exit=false
+```
 
 **托盘只是个看板，不在发送路径上。** Codex 每回合仍然是独立进程直接发消息，不经过托盘——所以托盘关掉不影响通知，也不影响回合收尾速度。
 
@@ -348,6 +379,10 @@ kill_on_exit = true
 ```
 
 `300` 分钟 = 5 小时窗口，`10080` 分钟 = 7 天。本程序按 `thread-id` 匹配到对应文件，**只读文件末尾 512 KB** 找最后一条记录，耗时 5–10 ms，不需要任何网络请求或凭据。
+
+快照里还带 `resets_at`（重置时刻），所以消息里能写「（22:11 重置）」「（下周日 09:56 重置）」这样的提示。
+
+**过期数据会被过滤掉。** 快照是 Codex 上次收尾时写的，如果那个窗口的重置时刻已经过去，说明额度早就回满了——此时再报「已用 99%」纯属误导，这一项会直接不显示。宁可少说，不说错话。
 
 注意：这里**只读** `~/.codex`，不会写入任何东西。不想要这块就设 `show_limits = false`。
 

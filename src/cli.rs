@@ -19,6 +19,7 @@ pub fn usage() {
 用法:
   codex-notify.exe '<事件JSON>'   由 Codex 的 notify 钩子调用
   codex-notify.exe                不带参数启动 = 常驻托盘（仅 Windows）
+  codex-notify.exe --set key=value  改一项配置（如 --set show_limits=false）
   codex-notify.exe --tray         同上，显式指定
   codex-notify.exe --test         用一条假事件真发一条，验证整条链路
   codex-notify.exe --dry-run      只打印将要发送的内容，不发请求
@@ -32,6 +33,35 @@ pub fn usage() {
         config_path().display(),
         data_dir().display()
     );
+}
+
+/// `--set key=value`：命令行改配置，和托盘菜单走同一条写回路径。
+///
+/// 值的类型自动识别（true/false → 布尔，数字 → 整数，其余 → 字符串）。
+/// 键支持点路径，例如 `--set napcat.kill_on_exit=false`。
+///
+/// 有这个入口除了方便脚本化，也是给菜单写入逻辑留一条可验证的路：
+/// 两条路径共用 `save_item`，命令行测通了菜单就通了。
+pub fn set(pair: &str) {
+    let Some((key, value)) = pair.split_once('=') else {
+        println!("格式应为 --set key=value，例如 --set show_limits=false");
+        return;
+    };
+    let key = key.trim();
+    let value = value.trim();
+
+    let result = if value == "true" || value == "false" {
+        crate::config::save_bool(key, value == "true")
+    } else if let Ok(n) = value.parse::<i64>() {
+        crate::config::save_int(key, n)
+    } else {
+        crate::config::save_str(key, value)
+    };
+
+    match result {
+        Ok(()) => println!("已写入 {key} = {value}（{}）", config_path().display()),
+        Err(e) => println!("写入失败: {e}"),
+    }
 }
 
 /// 生成默认配置。已存在就不覆盖 —— 用户手改过的配置比模板值钱。
@@ -69,8 +99,8 @@ pub fn check(cfg: &Config) {
     println!("enabled: {}", cfg.enabled);
     println!("prefix: {}", cfg.prefix);
     println!(
-        "show_limits: {} / show_footer: {}",
-        cfg.show_limits, cfg.show_footer
+        "show_limits: {} / show_reset: {} / limit_style: {} / show_footer: {}",
+        cfg.show_limits, cfg.show_reset, cfg.limit_style, cfg.show_footer
     );
     println!("chain: {} 个", cfg.chain.len());
     println!();
