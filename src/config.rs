@@ -30,6 +30,13 @@ pub struct Config {
     #[serde(default = "yes")]
     pub only_main_agent: bool,
 
+    /// 摘要位置显示什么：
+    ///   "thread"  —— Codex 给会话起的名字（默认，读 session_index.jsonl）
+    ///   "message" —— 原来的「最后一条回复 / 用户指令」
+    ///   "none"    —— 不显示这一段
+    #[serde(default = "default_summary_source")]
+    pub summary_source: String,
+
     /// 摘要最多保留多少个字符（按字数，不是字节）
     #[serde(default = "default_max_chars")]
     pub max_chars: usize,
@@ -146,6 +153,10 @@ fn default_base_url() -> String {
 fn default_prefix() -> String {
     "[Codex]".to_string()
 }
+
+fn default_summary_source() -> String {
+    "thread".to_string()
+}
 fn default_limit_style() -> String {
     "used".to_string()
 }
@@ -176,6 +187,7 @@ impl Config {
         Config {
             enabled: true,
             only_main_agent: true,
+            summary_source: default_summary_source(),
             max_chars: default_max_chars(),
             timeout_secs: default_timeout(),
             prefix: default_prefix(),
@@ -300,6 +312,9 @@ enabled = true
 # 但它们不代表「活干完了」。按 thread-id 查会话日志的 thread_source 判定；
 # 查不到就照常通知，宁可多发也不漏推真正的完成。
 only_main_agent = true
+# 摘要内容："thread" 显示 Codex 会话名，"message" 显示最后一条回复，"none" 不显示
+# 会话名从 ~/.codex/session_index.jsonl 读，读不到时自动退回最后一条回复
+summary_source = "thread"
 # 摘要最多保留多少个字符（按字数算，一个汉字算 1）
 max_chars = 260
 # 单次 HTTP 超时（秒）。这个值直接决定回合结束后最多卡多久

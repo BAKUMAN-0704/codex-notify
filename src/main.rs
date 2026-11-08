@@ -45,6 +45,7 @@
 
 mod agent;
 mod chain;
+mod thread_name;
 mod cli;
 mod clock;
 mod config;

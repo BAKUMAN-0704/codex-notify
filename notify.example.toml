@@ -12,6 +12,9 @@ enabled = true
 # 但它们不代表「活干完了」。按 thread-id 查会话日志的 thread_source 判定；
 # 查不到就照常通知，宁可多发也不漏推真正的完成。
 only_main_agent = true
+# 摘要内容："thread" 显示 Codex 会话名，"message" 显示最后一条回复，"none" 不显示
+# 会话名从 ~/.codex/session_index.jsonl 读，读不到时自动退回最后一条回复
+summary_source = "thread"
 # 摘要最多保留多少个字符（按字数算，一个汉字算 1）
 max_chars = 260
 # 单次 HTTP 超时（秒）。这个值直接决定回合结束后最多卡多久

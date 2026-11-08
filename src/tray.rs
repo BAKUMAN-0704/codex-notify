@@ -60,12 +60,14 @@ const ID_TOGGLE_KILL_EXIT: usize = 15;
 const ID_CYCLE_MAX_CHARS: usize = 16;
 const ID_CYCLE_TIMEOUT: usize = 17;
 const ID_TOGGLE_MAIN_ONLY: usize = 18;
+const ID_CYCLE_SUMMARY: usize = 19;
 
 /// 摘要长度的档位。菜单没法输数字，用「点一下换下一档」代替输入框。
 /// 260 是默认档；80 适合只想瞄一眼，600 基本是全文。
 const MAX_CHARS_STEPS: [i64; 5] = [80, 160, 260, 400, 600];
 /// HTTP 超时的档位（秒）。本机 NapCat 通常 5ms 就返回，档位只影响最坏情况。
 const TIMEOUT_STEPS: [i64; 4] = [1, 3, 5, 10];
+const SUMMARY_SOURCES: [&str; 3] = ["thread", "message", "none"];
 
 /// 由本程序启动的 NapCat。放在静态里是为了让菜单（窗口过程）也能访问。
 ///
@@ -475,6 +477,15 @@ unsafe fn show_menu(hwnd: HWND) {
             };
             AppendMenuW(sub, flags, id, w.as_ptr());
         }
+
+        // 摘要内容三档循环，标签里带当前档位
+        let summary_label = match cfg_now.summary_source.trim().to_ascii_lowercase().as_str() {
+            "message" => "摘要内容：最后一条回复",
+            "none" => "摘要内容：不显示",
+            _ => "摘要内容：会话名",
+        };
+        let summary_w = wide(summary_label);
+        AppendMenuW(sub, MF_STRING, ID_CYCLE_SUMMARY, summary_w.as_ptr());
         AppendMenuW(sub, MF_SEPARATOR, 0, std::ptr::null());
 
         // 第三组：数值档位。标签里带当前值，点一下切到下一档
@@ -545,6 +556,7 @@ unsafe fn show_menu(hwnd: HWND) {
         }
         ID_CYCLE_MAX_CHARS => cycle_int("max_chars", cfg_now.max_chars as i64, &MAX_CHARS_STEPS),
         ID_CYCLE_TIMEOUT => cycle_int("timeout_secs", cfg_now.timeout_secs as i64, &TIMEOUT_STEPS),
+        ID_CYCLE_SUMMARY => cycle_str("summary_source", &cfg_now.summary_source, &SUMMARY_SOURCES),
         ID_QUIT => {
             // 先删图标再关窗口：顺序反了会在托盘留下残影
             let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
@@ -608,6 +620,27 @@ fn cycle_int(key: &str, current: i64, steps: &[i64]) {
     }
 
     match crate::config::save_int(key, next) {
+        Ok(()) => crate::logfile::log(&format!("设置 {key} = {next}")),
+        Err(e) => crate::logfile::log(&format!("保存 {key} 失败: {e}")),
+    }
+}
+
+/// 在几个字符串档位之间循环（目前只有 summary_source 用）
+fn cycle_str(key: &str, current: &str, steps: &[&str]) {
+    let next = steps
+        .iter()
+        .position(|&v| v.eq_ignore_ascii_case(current.trim()))
+        .map(|i| steps[(i + 1) % steps.len()])
+        .unwrap_or(steps[0]);
+
+    if let Ok(mut c) = cfg().write() {
+        match key {
+            "summary_source" => c.summary_source = next.to_string(),
+            _ => {}
+        }
+    }
+
+    match crate::config::save_str(key, next) {
         Ok(()) => crate::logfile::log(&format!("设置 {key} = {next}")),
         Err(e) => crate::logfile::log(&format!("保存 {key} 失败: {e}")),
     }
