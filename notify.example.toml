@@ -20,13 +20,17 @@ show_limits = true
 show_footer = false
 
 # 链式转发：Codex 的 notify 槽位只有一个。
-# 如果你的 Codex 桌面版原本用它做别的事（比如桌宠动画），
-# 把那条原命令按数组写在这里，我们会先转发给它再发通知。
 #
-# 例如（Windows 桌面版默认值，路径随版本变化）：
-# chain = ['C:\Users\you\AppData\Local\OpenAI\Codex\runtimes\...\codex-computer-use.exe', 'turn-ended']
+# 有两种情况，先看你 ~/.codex/config.toml 里 notify 那行长什么样：
 #
-# 不需要就留空：
+#   A) 里面出现 --previous-notify
+#      说明 Codex 桌面版已经把桌宠包在前面、通过它转发到本程序。
+#      此时这里必须留空，否则桌宠每回合会被调用两次。
+#
+#   B) 里面直接就是本程序的路径，且原本有别的程序
+#      把原命令按数组写在这里，我们会先转发给它再发通知：
+#      chain = ['C:\Users\you\...\codex-computer-use.exe', 'turn-ended']
+#
 chain = []
 
 [qq]

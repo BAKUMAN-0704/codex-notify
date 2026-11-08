@@ -88,7 +88,7 @@ pub fn sample_event() -> Event {
         cwd: r"C:\Users\you\projects\demo".into(),
         input_messages: vec!["实现通知功能".into()],
         last_assistant_message: Some(
-            "已把 Codex 的 notify 钩子接到 QQ OneBot 接口，并保留原桌面版钩子的链式转发。".into(),
+            "已把 Codex 的 notify 钩子接到 QQ 的 OneBot 接口，测试通过。".into(),
         ),
     }
 }

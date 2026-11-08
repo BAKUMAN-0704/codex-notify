@@ -190,11 +190,30 @@ notify = ['D:\tools\codex-notify\codex-notify.exe']
 - **必须是绝对路径**，`~` 这类写法 Codex 不会展开
 - **必须在顶层**。写进 `[tui]` 段落里不会生效，而且不报错，很难发现
 
-**如果这里原来已经有内容**（比如桌面版的桌宠），不要直接删掉，把它挪到 `notify.toml` 的 `chain` 里：
+**如果这里原来已经有内容**（比如桌面版的桌宠），分两种情况，先看一眼你现在这行长什么样：
+
+**情况 A：看到 `--previous-notify`**
+
+```toml
+notify = [ "C:\\...\\codex-computer-use.exe", "turn-ended",
+           "--previous-notify", "[\"D:\\\\...\\\\codex-notify.exe\"]" ]
+```
+
+这说明 **Codex 桌面版已经自动接管了**：它把桌宠放在前面，再把你的程序挂在 `--previous-notify` 参数里，由桌宠转发过来。实际调用是：
+
+```
+Codex → codex-computer-use.exe → codex-notify.exe
+```
+
+这种情况下 **`notify.toml` 里的 `chain` 要留空**（`chain = []`）。因为桌宠已经在外面被调用过一次了，再配 chain 会让它每回合跑两次。
+
+**情况 B：原来那行没有 `--previous-notify`**
+
+那你就是自己直接接管了槽位，需要手动把原命令挪到 `chain` 里，否则桌宠不再响应：
 
 ```toml
 # 原来可能是：notify = ["C:\\...\\codex-computer-use.exe", "turn-ended"]
-# 现在改成上面那行指向 codex-notify，然后把原命令写到这里：
+# 改成 notify = ['你的 codex-notify.exe']，然后把原命令写到这里：
 chain = ['C:\Users\<你>\AppData\Local\OpenAI\Codex\runtimes\...\codex-computer-use.exe', 'turn-ended']
 ```
 
