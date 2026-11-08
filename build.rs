@@ -27,7 +27,7 @@ fn main() {
         }
 
         // 顺手写一点文件属性，鼠标悬停在 exe 上能看到说明
-        res.set("FileDescription", "Codex 回合结束通知");
+        res.set("FileDescription", "codex-notify");
         res.set("ProductName", "codex-notify");
         res.set("LegalCopyright", "MIT License");
 

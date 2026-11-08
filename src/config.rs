@@ -22,6 +22,14 @@ pub struct Config {
     #[serde(default = "yes")]
     pub enabled: bool,
 
+    /// 是否只通知主 Agent。
+    ///
+    /// Codex 的子 Agent、内部审查回合结束时也会触发 notify，但那不代表「活干完了」。
+    /// 开启后按 thread-id 查会话日志的 thread_source，只给主会话发消息。
+    /// 查不到 / 字段不认识时一律照常通知（宁可多发，不能漏推）。
+    #[serde(default = "yes")]
+    pub only_main_agent: bool,
+
     /// 摘要最多保留多少个字符（按字数，不是字节）
     #[serde(default = "default_max_chars")]
     pub max_chars: usize,
@@ -167,6 +175,7 @@ impl Config {
     pub fn fallback() -> Self {
         Config {
             enabled: true,
+            only_main_agent: true,
             max_chars: default_max_chars(),
             timeout_secs: default_timeout(),
             prefix: default_prefix(),
@@ -287,6 +296,10 @@ fn save_item(key: &str, item: toml_edit::Item) -> Result<(), String> {
 /// 用户复制粘贴时也不容易出错。
 pub const CONFIG_TEMPLATE: &str = r#"# codex-notify 配置（放在 exe 旁边）
 enabled = true
+# 只通知主 Agent：子 Agent / 内部审查回合完成时也会触发 notify，
+# 但它们不代表「活干完了」。按 thread-id 查会话日志的 thread_source 判定；
+# 查不到就照常通知，宁可多发也不漏推真正的完成。
+only_main_agent = true
 # 摘要最多保留多少个字符（按字数算，一个汉字算 1）
 max_chars = 260
 # 单次 HTTP 超时（秒）。这个值直接决定回合结束后最多卡多久

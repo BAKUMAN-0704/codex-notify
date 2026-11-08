@@ -47,7 +47,7 @@ pub struct Limits {
 ///
 /// 优先用 `CODEX_HOME` 环境变量（Codex 官方支持自定义），
 /// 否则退回 Windows 的 `%USERPROFILE%\.codex`。
-fn codex_home() -> PathBuf {
+pub(crate) fn codex_home() -> PathBuf {
     if let Ok(v) = env::var("CODEX_HOME") {
         if !v.trim().is_empty() {
             return PathBuf::from(v);

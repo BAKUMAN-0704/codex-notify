@@ -20,6 +20,7 @@ pub fn usage() {
   codex-notify.exe '<事件JSON>'   由 Codex 的 notify 钩子调用
   codex-notify.exe                不带参数启动 = 常驻托盘（仅 Windows）
   codex-notify.exe --set key=value  改一项配置（如 --set show_limits=false）
+  codex-notify.exe --classify <id> 查某个 thread-id 会被判为主/子 Agent
   codex-notify.exe --tray         同上，显式指定
   codex-notify.exe --test         用一条假事件真发一条，验证整条链路
   codex-notify.exe --dry-run      只打印将要发送的内容，不发请求
@@ -64,6 +65,35 @@ pub fn set(pair: &str) {
     }
 }
 
+/// `--classify <thread-id>`：把「这条事件会不会被过滤」摊开给人看。
+///
+/// 不发消息、不改文件、不读配置，纯粹是排查工具：
+/// 收到一条意外的通知（或该来的没来）时，拿事件 JSON 里的 thread-id 查一下即可。
+pub fn classify(thread_id: &str) {
+    let v = crate::agent::classify(thread_id);
+    println!("thread-id:     {thread_id}");
+    println!(
+        "会话文件:     {}",
+        v.file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(未找到)".to_string())
+    );
+    println!(
+        "thread_source: {}",
+        v.thread_source.as_deref().unwrap_or("(无此字段)")
+    );
+    println!("判定:         {}", v.origin.label());
+    println!(
+        "结果:         {}",
+        if v.origin.should_skip() {
+            "会跳过通知"
+        } else {
+            "会照常通知"
+        }
+    );
+}
+
 /// 生成默认配置。已存在就不覆盖 —— 用户手改过的配置比模板值钱。
 pub fn init_config() {
     let path = config_path();
@@ -96,7 +126,7 @@ pub fn init_config() {
 /// 这个输出经常被截图贴到聊天里求助，不能把 token 泄露出去。
 pub fn check(cfg: &Config) {
     println!("配置文件: {}", config_path().display());
-    println!("enabled: {}", cfg.enabled);
+    println!("enabled: {} / only_main_agent: {}", cfg.enabled, cfg.only_main_agent);
     println!("prefix: {}", cfg.prefix);
     println!(
         "show_limits: {} / show_reset: {} / limit_style: {} / show_footer: {}",
