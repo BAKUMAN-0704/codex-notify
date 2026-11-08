@@ -5,7 +5,7 @@
 //! NapCat 不是单个进程。看它的启动脚本就知道：
 //!
 //! ```text
-//! powershell.exe → cmd（解释 .bat）→ NapCatWinBootMain.exe → QQ.exe（+ 若干渲染/GPU 子进程）
+//! pwsh.exe（PowerShell 7）→ cmd（解释 .bat）→ NapCatWinBootMain.exe → QQ.exe（+ 若干渲染/GPU 子进程）
 //! ```
 //!
 //! 想「退出时一起关掉」，逐个记 PID 再 kill 是不可靠的：子进程会漏、PID 会复用、
@@ -53,11 +53,20 @@ pub struct Managed {
     job: HANDLE,
 }
 
+/// `start()` 的结果。
+///
+/// `used_pwsh` 告诉托盘这次到底用没用上 pwsh 7：只有回退到 cmd 时，
+/// 才需要额外把二维码 PNG 弹出来（cmd 的字符画容易乱码）。
+pub struct Started {
+    pub managed: Option<Managed>,
+    pub used_pwsh: bool,
+}
+
 /// NapCat 把登录二维码写到 `<NapCat目录>/cache/qrcode.png`。
 ///
-/// 为什么需要这个：控制台里的二维码是字符画，终端字体和编码经常
-/// 渲染成乱码，根本扫不出来。而这张 PNG 是干净的 147×147 图片，
-/// 直接打开就能扫 —— 比纠结用哪个终端靠谱得多。
+/// 为什么会有这个文件：控制台里的二维码是字符画，cmd 的字体和编码经常
+/// 渲染成乱码。pwsh 7 默认 UTF-8 能直接看清；只有回退 cmd 时才需要
+/// 把这张干净的 147×147 PNG 弹出来扫码。
 ///
 /// 路径从启动命令推导：`D:\tools\NapCat\launcher-user.bat`
 /// → `D:\tools\NapCat\cache\qrcode.png`
@@ -93,15 +102,33 @@ fn powershell_script(command: &[String]) -> String {
     s
 }
 
-fn spawn_via_powershell(command: &[String]) -> Result<std::process::Child, String> {
-    let mut c = Command::new("powershell.exe");
-    c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"])
-        .arg(powershell_script(command))
-        .creation_flags(CREATE_NEW_CONSOLE);
-    c.spawn().map_err(|e| e.to_string())
+/// pwsh 7 的候选路径：先走 PATH，再试标准安装目录。
+/// 老系统的 `powershell.exe`（5.1）不作为候选 —— 明确只用 7。
+fn pwsh_candidates() -> Vec<String> {
+    let mut v = vec!["pwsh.exe".to_string()];
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        v.push(format!("{pf}\\PowerShell\\7\\pwsh.exe"));
+    }
+    v
 }
 
-/// 兜底：机器上找不到 powershell.exe 时，回到原来的方式。
+fn spawn_via_pwsh(command: &[String]) -> Result<std::process::Child, String> {
+    let script = powershell_script(command);
+    let mut errors = Vec::new();
+    for exe in pwsh_candidates() {
+        let mut c = Command::new(&exe);
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"])
+            .arg(&script)
+            .creation_flags(CREATE_NEW_CONSOLE);
+        match c.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e) => errors.push(format!("{exe}: {e}")),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+/// 兜底：机器上没装 pwsh 7 时，回到原来的方式。
 fn spawn_via_cmd(command: &[String]) -> Result<std::process::Child, String> {
     let mut c = Command::new("cmd");
     c.arg("/c").arg(&command[0]);
@@ -116,23 +143,25 @@ fn spawn_via_cmd(command: &[String]) -> Result<std::process::Child, String> {
 ///
 /// `kill_on_exit = true` 时把它放进作业对象，本进程退出即连带结束；
 /// 否则就是普通地拉起来，撒手不管。
-pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, String> {
+pub fn start(command: &[String], kill_on_exit: bool) -> Result<Started, String> {
     if command.is_empty() {
         return Err("没有配置 [napcat].command".to_string());
     }
 
-    // PowerShell 当外层宿主：窗口对 UTF-8 / 字符画更友好，.ps1 / .exe 也能用同一套调用。
-    // 注意 .bat 本质仍由系统隐式调 cmd.exe 解释，所以只是「外壳」换了，
-    // NapCat 脚本本身的内容和行为完全不变。
+    // pwsh 7 当外层宿主：默认 UTF-8，控制台里的字符画二维码能直接看清，
+    // 不用再弹 PNG。注意 .bat 本质仍由系统隐式调 cmd.exe 解释，
+    // 所以只是「外壳」换了，NapCat 脚本本身的内容和行为完全不变。
     //
-    // 万一机器上找不到 powershell.exe（精简系统、PATH 被裁），退回原来的 cmd /c ——
-    // 不能因为换个窗口就让 NapCat 起不来。
-    let child = spawn_via_powershell(command)
-        .or_else(|e| {
-            log(&format!("PowerShell 启动失败（{e}），回退 cmd"));
-            spawn_via_cmd(command)
-        })
-        .map_err(|e| format!("启动失败: {e}"))?;
+    // 万一机器上没装 pwsh 7（或 PATH 被裁），退回原来的 cmd /c ——
+    // 不能因为换个窗口就让 NapCat 起不来；那种情况下托盘仍会弹二维码图片。
+    let (child, used_pwsh) = match spawn_via_pwsh(command) {
+        Ok(c) => (c, true),
+        Err(e) => {
+            log(&format!("pwsh 7 启动失败（{e}），回退 cmd"));
+            let c = spawn_via_cmd(command).map_err(|e2| format!("启动失败: {e2}"))?;
+            (c, false)
+        }
+    };
 
     // 不重定向 stdout/stderr：让它占着自己的控制台，和手动双击脚本完全一致。
     // 之前把输出倒进文件、顺便把 stdin 接到 null，结果 NapCat 引导器行为异常，
@@ -143,7 +172,10 @@ pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, 
 
     if !kill_on_exit {
         // 不托管生命周期：子进程继续跑，我们退出也不管它
-        return Ok(None);
+        return Ok(Started {
+            managed: None,
+            used_pwsh,
+        });
     }
 
     // 作业句柄在 unsafe 块里创建，成功后才赋值给外面这个变量，
@@ -169,29 +201,39 @@ pub fn start(command: &[String], kill_on_exit: bool) -> Result<Option<Managed>, 
             return Err("设置 Job Object 失败".to_string());
         }
 
-        // 把刚拉起的 PowerShell 放进去。它的子进程（cmd、NapCatWinBootMain、QQ）
-        // 默认会继承这个作业，所以整棵树都在管控范围内。
+        // 把刚拉起的 pwsh（或兜底的 cmd）放进去。它的子进程
+        // （cmd、NapCatWinBootMain、QQ）默认会继承这个作业，
+        // 所以整棵树都在管控范围内。
         let proc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
         if proc.is_null() {
             // 极少数情况会失败（权限不足）。此时不回滚：NapCat 已经在跑了，
             // 只是失去托管能力。宁可「能启动但退不干净」，也别「启动失败」。
             log("无法打开 NapCat 进程，退出时不会自动结束它");
             CloseHandle(h);
-            return Ok(None);
+            return Ok(Started {
+                managed: None,
+                used_pwsh,
+            });
         }
         let assigned = AssignProcessToJobObject(h, proc);
         CloseHandle(proc);
         if assigned == 0 {
             log("把 NapCat 加入 Job Object 失败，退出时不会自动结束它");
             CloseHandle(h);
-            return Ok(None);
+            return Ok(Started {
+                managed: None,
+                used_pwsh,
+            });
         }
 
         job = h;
     }
 
     // 走到这里说明作业已建好、进程已放进去，把句柄带出去交给调用方持有
-    Ok(Some(Managed { job }))
+    Ok(Started {
+        managed: Some(Managed { job }),
+        used_pwsh,
+    })
 }
 
 #[cfg(test)]

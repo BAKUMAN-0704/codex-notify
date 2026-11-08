@@ -681,19 +681,26 @@ fn start_napcat(command: &[String], kill_on_exit: bool) {
         return;
     }
     match crate::napcat::start(command, kill_on_exit) {
-        Ok(Some(guard)) => {
-            if let Ok(mut g) = GUARD.lock() {
-                *g = Some(guard);
+        Ok(started) => match started.managed {
+            Some(guard) => {
+                if let Ok(mut g) = GUARD.lock() {
+                    *g = Some(guard);
+                }
+                crate::logfile::log("NapCat 已纳入托管，退出托盘时会一起结束");
+
+                // pwsh 7 控制台默认 UTF-8，字符画二维码直接看窗口就行，不再弹图片。
+                // 只有没装 pwsh 7、回退到 cmd 时才需要（cmd 的字符画容易乱码）。
+                if started.used_pwsh {
+                    crate::logfile::log("pwsh 7 启动：二维码看控制台，不弹图片");
+                } else {
+                    watch_qrcode(command);
+                }
             }
-            crate::logfile::log("NapCat 已纳入托管，退出托盘时会一起结束");
-            // 起个后台线程盯二维码：控制台里的字符画经常是乱码，
-            // 从 cache/qrcode.png 打开图片扫码更可靠
-            watch_qrcode(command);
-        }
-        Ok(None) => {
-            // kill_on_exit = false，或者加不进 Job：进程已在跑，只是不归我们管
-            crate::logfile::log("NapCat 已启动，但未纳入托管");
-        }
+            None => {
+                // kill_on_exit = false，或者加不进 Job：进程已在跑，只是不归我们管
+                crate::logfile::log("NapCat 已启动，但未纳入托管");
+            }
+        },
         Err(e) => crate::logfile::log(&format!("NapCat 启动失败: {e}")),
     }
 }
