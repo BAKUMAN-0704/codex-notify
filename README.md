@@ -364,7 +364,9 @@ kill_on_exit = true
 
 `launcher-user.bat` 不提权，`launcher.bat` 会弹 UAC。如果你的 QQ 装在 `Program Files` 下、用户态注入失败，换成后者。
 
-**实现上没有逐个 kill PID，用的是 Job Object。** 托盘用 PowerShell 拉起启动脚本（`.bat` 仍由系统隐式调 `cmd.exe` 解释），进程树是 `powershell.exe → cmd → NapCatWinBootMain.exe → QQ.exe（+ 若干渲染子进程）`，逐 PID 清理容易漏、也会被 PID 复用坑到。找不到 `powershell.exe` 时会自动退回 `cmd /c`，不影响启动。Job Object 设上 `KILL_ON_JOB_CLOSE` 之后，本进程退出 → 句柄关闭 → 整棵树一起结束，不需要写任何清理逻辑。
+**实现上没有逐个 kill PID，用的是 Job Object。** 托盘用 **pwsh 7**（`pwsh.exe`）拉起启动脚本（`.bat` 仍由系统隐式调 `cmd.exe` 解释），进程树是 `pwsh.exe → cmd → NapCatWinBootMain.exe → QQ.exe（+ 若干渲染子进程）`，逐 PID 清理容易漏、也会被 PID 复用坑到。Job Object 设上 `KILL_ON_JOB_CLOSE` 之后，本进程退出 → 句柄关闭 → 整棵树一起结束，不需要写任何清理逻辑。找不到 pwsh 7 时会自动退回 `cmd /c`，不影响启动。
+
+pwsh 7 默认 UTF-8，控制台里的字符画二维码能直接看清，**这时不会自动弹出二维码图片**；只有回退到 cmd 时才把 `cache/qrcode.png` 弹出来（cmd 的字体和编码容易把字符画渲染成乱码）。
 
 ---
 
