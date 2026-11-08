@@ -1,6 +1,6 @@
 [package]
 name = "codex-notify"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Codex 的 notify 钩子：回合结束时把结果推到 QQ"
 
@@ -14,6 +14,11 @@ toml = "0.8"
 # 关掉默认特性：本程序只访问本机 NapCat 的 http 接口，用不到 TLS，
 # 这样能省掉 rustls/ring 这一大坨依赖，编译更快、二进制更小。
 ureq = { version = "2", default-features = false }
+
+[build-dependencies]
+# 把 assets/codex-notify.ico 编译进 exe 的 Windows 资源段，
+# 这样任务栏、资源管理器里显示的是自己的图标而不是默认空白图标
+winres = "0.1"
 
 [profile.release]
 opt-level = "z"      # 优先体积，这个程序不做计算密集的事
