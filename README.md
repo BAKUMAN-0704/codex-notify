@@ -13,6 +13,8 @@
 
 比“盯着终端等”省事，也比“跑完忘了回来看”安全。
 
+**[下载最新版本](https://github.com/BAKUMAN-0704/codex-notify/releases)** · [怎么安装](#安装) · [怎么配置](#配置) · [常见问题](#常见问题)
+
 ---
 
 ## 它是怎么工作的
@@ -50,71 +52,156 @@ Codex 的 `notify` **全局只有一个槽位**。而 Codex 桌面版默认把�
 
 ## 前置条件
 
-| 需要 | 说明 |
-|---|---|
-| **Codex** | CLI 或桌面版均可，需要能改 `~/.codex/config.toml` |
-| **Rust** | 编译用，1.70+ 应该都行（开发时用的是 1.99） |
-| **NapCat**（或同类） | 提供 OneBot v11 的 HTTP 接口，且已登录一个 QQ 号 |
-
-NapCat 的安装不在本项目范围内，官方文档见 <https://napneko.github.io/>。要点是：装好后在 WebUI 的「网络配置 → HTTP 服务器」里启用一个 HTTP 服务，记下端口和 token。
+| 需要 | 说明 | 什么时候需要 |
+|---|---|---|
+| **Codex** | CLI 或桌面版均可，需要能改 `~/.codex/config.toml` | 必需 |
+| **NapCat**（或任何 OneBot v11 实现） | 提供 HTTP 接口，且已登录一个 QQ 号 | 必需 |
+| **Rust 1.70+** | 只有「自己编译」才需要，下载预编译版本可以跳过 | 可选 |
 
 ---
 
 ## 安装
 
-**1. 编译**
+两条路，任选一条。产物完全一样，区别只在于要不要装 Rust。
+
+### 方式一：下载预编译版本（推荐）
+
+1. 打开 [**Releases**](https://github.com/BAKUMAN-0704/codex-notify/releases)，在最新版本的 **Assets** 里下载 `codex-notify.exe`
+2. 放到一个固定的目录，比如 `C:\Users\<你>\.codex\bin\`
+
+   放固定目录是有原因的：后面 `config.toml` 里要写死这个路径，放在临时目录（下载文件夹、桌面）容易被清理掉，钩子就静默失效了。
+
+3. 可选：核对文件完整性。Release 说明里有 SHA256，用 PowerShell 算一遍对比：
+
+   ```powershell
+   Get-FileHash .\codex-notify.exe -Algorithm SHA256
+   ```
+
+单文件、无运行时依赖，约 730 KB，Windows 10/11 x64。
+
+### 方式二：自己编译
+
+需要先装 [Rust](https://rustup.rs/)，装完 `rustc --version` 能输出就行。
 
 ```bash
-git clone https://github.com/<you>/codex-notify.git
+git clone https://github.com/BAKUMAN-0704/codex-notify.git
 cd codex-notify
 cargo build --release
 ```
 
-产物在 `target/release/codex-notify.exe`，可以拷到任意稳定目录（示例里放在 `~/.codex/bin/`）。
+产物在 `target/release/codex-notify.exe`（为什么不用 `target/release/` 直接跑：`cargo clean` 会把它删掉，钩子就断了）。把它复制到固定目录再用：
 
-**2. 写配置**
-
-```bash
-codex-notify.exe --init     # 在 exe 旁边生成 notify.toml
+```powershell
+copy target\release\codex-notify.exe $env:USERPROFILE\.codex\bin\
 ```
 
-然后改三处：
+> 下面的配置步骤，两种方式完全相同。
+
+---
+
+## 配置
+
+分三步，建议按顺序做。每一步都能单独验证，出了问题容易定位。
+
+### 第一步：让 NapCat 能发消息
+
+本程序不直接连腾讯服务器，它只是往本机的一个 HTTP 接口发请求。所以得先把这个接口跑起来。
+
+1. 安装并启动 [NapCat](https://github.com/NapNeko/NapCatQQ)，扫码登录一个 QQ 号
+2. 打开 NapCat 的 WebUI（默认 `http://127.0.0.1:6099`）→ **网络配置 → HTTP 服务器** → 新增一个
+3. 记下两样东西：
+
+   - **端口**（默认 `3000`）
+   - **token**（可以为空，但强烈建议设一个——这个接口能以你的 QQ 身份发消息，裸奔等于本机任何程序都能冒充你）
+
+**验证这一步：** 浏览器访问 <http://127.0.0.1:3000/get_login_info>，能返回 JSON 且里面有你登录的 QQ 号，就说明服务通了。
+
+```json
+{"status":"ok","retcode":0,"data":{"user_id":123456789,"nickname":"..."}}
+```
+
+打不开的话，先确认 NapCat 在运行、HTTP 服务器是「启用」状态、端口没被占用。
+
+### 第二步：写 notify.toml
+
+在 exe 所在目录执行：
+
+```bash
+codex-notify.exe --init
+```
+
+会在 exe 旁边生成一份 `notify.toml`（已存在则不覆盖）。改这三个字段，其余保持默认：
+
+| 字段 | 填什么 | 值从哪来 |
+|---|---|---|
+| `[qq].base_url` | `http://127.0.0.1:3000` | 第一步记下的端口 |
+| `[qq].access_token` | 第一步记下的 token | 没设 token 就留空 `""` |
+| `[qq].target` | `private:你的QQ号` | 发到群就写 `group:群号` |
+
+改完大概长这样：
 
 ```toml
 [qq]
-base_url = "http://127.0.0.1:3000"   # NapCat 的 HTTP 地址
-access_token = ""                     # 和 NapCat 里配的一致
-target = "private:123456789"          # 你的 QQ 号
+base_url = "http://127.0.0.1:3000"
+access_token = "你设的token"
+target = "private:123456789"
 ```
 
-**3. 接管 Codex 的 notify 槽位**
+> **配置文件放在哪？** 默认在 exe 同目录，日志（`notify.log`）也写在这里。想换位置就设环境变量 `CODEX_NOTIFY_DIR` 指向目标目录。从 `target/release` 里直接运行时，会自动往上两级找配置，方便开发调试。
 
-编辑 `~/.codex/config.toml`，加一行（**注意是顶层配置，不是 `[tui]` 下面**）：
+其余字段的含义见下方[配置项](#配置项)表，一开始不用动。
+
+### 第三步：接管 Codex 的 notify 槽位
+
+编辑 `~/.codex/config.toml`，**在顶层**（不是 `[tui]` 下面）加一行：
 
 ```toml
-notify = ['C:\Users\you\.codex\bin\codex-notify.exe']
+notify = ['C:\Users\<你>\.codex\bin\codex-notify.exe']
 ```
 
-如果原来这里已经有别的程序，把它移到 `notify.toml` 的 `chain` 里，别直接删掉：
+两个容易踩的点：
+
+- **必须是绝对路径**，`~` 这类写法 Codex 不会展开
+- **必须在顶层**。写进 `[tui]` 段落里不会生效，而且不报错，很难发现
+
+**如果这里原来已经有内容**（比如桌面版的桌宠），不要直接删掉，把它挪到 `notify.toml` 的 `chain` 里：
 
 ```toml
-chain = ['C:\...\codex-computer-use.exe', 'turn-ended']
+# 原来可能是：notify = ["C:\\...\\codex-computer-use.exe", "turn-ended"]
+# 现在改成上面那行指向 codex-notify，然后把原命令写到这里：
+chain = ['C:\Users\<你>\AppData\Local\OpenAI\Codex\runtimes\...\codex-computer-use.exe', 'turn-ended']
 ```
 
-**4. 验证**
+这样我们收到事件后会先把原始 JSON 转发给它，再发自己的通知，两边共存。
+
+### 验证
 
 ```bash
-codex-notify.exe --check     # 检查配置 + 探测 NapCat 是否在线
-codex-notify.exe --test      # 真发一条到手机
+codex-notify.exe --check     # ① 检查配置 + 探测 NapCat
+codex-notify.exe --test      # ② 真发一条到手机
 ```
 
-`--check` 会打印当前登录的 QQ 号（通过 NapCat 的 `get_login_info` 接口），能对上就说明链路通了。
+① 应该看到：
+
+```
+== QQ（走本机 NapCat）==
+base_url: http://127.0.0.1:3000
+target:   private:123456789
+token:    (已设置)
+连通性:   OK -> {"status":"ok","retcode":0,"data":{"user_id":...}}
+```
+
+「连通性 OK」说明配置读对了、NapCat 也在线。这一步不验证「能不能真的发出去」，只验证「连得上、登录着」。
+
+② 会真的往你手机发一条。收到了就说明整条链路通了。没收到就看 exe 同目录的 `notify.log`，里面会写明失败原因（连接被拒、HTTP 401、retcode 非 0 等）。
+
+最后回到 Codex 随便跑一个回合，确认它也会自动触发。
 
 ---
 
 ## 配置项
 
-配置文件默认放在 exe 旁边。也支持用环境变量 `CODEX_NOTIFY_DIR` 指定目录；从 `target/release` 里直接运行时，会自动往上两级找。
+所有字段都有默认值，`notify.toml` 里只写你关心的几项也行。
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
@@ -123,7 +210,7 @@ codex-notify.exe --test      # 真发一条到手机
 | `timeout_secs` | `5` | HTTP 超时。这个值决定回合结束后最多卡多久 |
 | `prefix` | `"[Codex]"` | 消息标题前缀 |
 | `show_limits` | `true` | 是否带 5h / 周额度 |
-| `show_footer` | `true` | 是否带末尾的 `(turn N · thread XXXXXXXX)` |
+| `show_footer` | `false` | 是否带末尾的 `(turn N · thread XXXXXXXX)`，多会话并行时才建议开 |
 | `chain` | `[]` | 链式转发的原 notify 命令（数组，第一个元素是程序路径） |
 | `[qq].base_url` | `http://127.0.0.1:3000` | NapCat 的 HTTP 服务地址 |
 | `[qq].access_token` | `""` | OneBot 鉴权 token，空则不带头 |

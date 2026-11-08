@@ -40,7 +40,9 @@ pub struct Config {
     pub show_limits: bool,
 
     /// 是否在消息末尾带 `(turn N · thread XXXXXXXX)`
-    #[serde(default = "yes")]
+    ///
+    /// 默认关：开启后每轮都多一行，只有同时开多个 Codex 会话时才值得开。
+    #[serde(default = "no")]
     pub show_footer: bool,
 
     /// 链式转发的原有 notify 命令，例如
@@ -76,6 +78,9 @@ pub struct Qq {
 
 fn yes() -> bool {
     true
+}
+fn no() -> bool {
+    false
 }
 fn default_max_chars() -> usize {
     260
@@ -119,7 +124,7 @@ impl Config {
             timeout_secs: default_timeout(),
             prefix: default_prefix(),
             show_limits: true,
-            show_footer: true,
+            show_footer: false,
             chain: Vec::new(),
             qq: None,
         }
