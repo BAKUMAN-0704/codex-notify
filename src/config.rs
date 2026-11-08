@@ -98,6 +98,11 @@ pub struct Napcat {
     #[serde(default)]
     pub command: Vec<String>,
 
+    /// 启动外壳："cmd" / "pwsh"（5.1）/ "pwsh7"（7）。
+    /// 默认 pwsh；只有 pwsh 不弹二维码图片，另两档会弹。
+    #[serde(default = "default_shell")]
+    pub shell: String,
+
     /// 托盘退出时是否把 NapCat 一起结束。
     ///
     /// 只会结束**由本程序启动的**那个；你自己手动开的 NapCat 它不认识，也不会去杀。
@@ -109,6 +114,7 @@ impl Default for Napcat {
     fn default() -> Self {
         Self {
             command: Vec::new(),
+            shell: default_shell(),
             kill_on_exit: true,
         }
     }
@@ -156,6 +162,10 @@ fn default_prefix() -> String {
 
 fn default_summary_source() -> String {
     "thread".to_string()
+}
+
+fn default_shell() -> String {
+    "pwsh".to_string()
 }
 fn default_limit_style() -> String {
     "used".to_string()

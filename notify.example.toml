@@ -67,5 +67,8 @@ target = "private:123456789"
 # 如果你的 QQ 装在 Program Files 且注入失败，换成会弹 UAC 的 launcher.bat
 # command = ['D:\tools\NapCat\launcher-user.bat']
 command = []
+# 启动外壳：cmd / pwsh（5.1）/ pwsh7（7）
+# 只有 pwsh 不弹二维码图片，另两档会弹；找不到对应程序会自动降级 cmd
+shell = "pwsh"
 # 退出托盘时是否结束 NapCat（只针对上面这条命令启动的那个）
 kill_on_exit = true

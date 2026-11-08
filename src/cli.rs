@@ -133,6 +133,10 @@ pub fn check(cfg: &Config) {
         cfg.show_limits, cfg.show_reset, cfg.limit_style, cfg.show_footer, cfg.summary_source
     );
     println!("chain: {} 个", cfg.chain.len());
+    println!(
+        "napcat.shell: {}",
+        cfg.napcat.as_ref().map(|n| n.shell.as_str()).unwrap_or("pwsh")
+    );
     println!();
 
     println!("== QQ（走本机 NapCat）==");

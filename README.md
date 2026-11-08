@@ -271,6 +271,7 @@ token:    (已设置)
 | `[qq].access_token` | `""` | OneBot 鉴权 token，空则不带头 |
 | `[qq].target` | — | `private:QQ号` 或 `group:群号` |
 | `[napcat].command` | `[]` | 托盘要拉起的 NapCat 启动命令，留空则不托管 |
+| `[napcat].shell` | `"pwsh"` | 启动外壳：`cmd` / `pwsh`（5.1）/ `pwsh7`（7）。找不到对应程序会降级 `cmd`。只有 `pwsh` 不弹二维码图片，另两档会弹 |
 | `[napcat].kill_on_exit` | `true` | 托盘退出时是否一起结束 NapCat |
 
 ---
@@ -329,6 +330,7 @@ D:\tools\codex-notify\codex-notify.exe --tray
 | 摘要内容：… | `summary_source` | 点击循环 会话名 → 最后一条回复 → 不显示 |
 | 摘要长度：N 字 | `max_chars` | 点击循环 80 → 160 → 260 → 400 → 600 |
 | HTTP 超时：N 秒 | `timeout_secs` | 点击循环 1 → 3 → 5 → 10 |
+| 启动外壳：… | `[napcat].shell` | 点击循环 cmd → pwsh → pwsh7 |
 | 退出托盘时一起关闭 NapCat | `[napcat].kill_on_exit` | 只作用于托盘自己启动的那个 |
 
 **没进菜单的是文本和路径类**：`prefix`（前缀）、`chain`（转发命令）、`[qq]` 的地址/账号、`[napcat].command`——菜单没法输入这些，用上面的「打开配置目录」编辑文件。改完不用重启，下一次通知就按新配置走。
@@ -352,6 +354,8 @@ codex-notify.exe --set napcat.kill_on_exit=false
 [napcat]
 # Windows 版 NapCat 的启动脚本（换成你自己的路径）
 command = ['D:\tools\NapCat\launcher-user.bat']
+# 启动外壳：cmd / pwsh（5.1）/ pwsh7（7）
+shell = "pwsh"
 # 退出托盘时一起结束
 kill_on_exit = true
 ```
@@ -364,9 +368,9 @@ kill_on_exit = true
 
 `launcher-user.bat` 不提权，`launcher.bat` 会弹 UAC。如果你的 QQ 装在 `Program Files` 下、用户态注入失败，换成后者。
 
-**实现上没有逐个 kill PID，用的是 Job Object。** 托盘用 **pwsh 7**（`pwsh.exe`）拉起启动脚本（`.bat` 仍由系统隐式调 `cmd.exe` 解释），进程树是 `pwsh.exe → cmd → NapCatWinBootMain.exe → QQ.exe（+ 若干渲染子进程）`，逐 PID 清理容易漏、也会被 PID 复用坑到。Job Object 设上 `KILL_ON_JOB_CLOSE` 之后，本进程退出 → 句柄关闭 → 整棵树一起结束，不需要写任何清理逻辑。找不到 pwsh 7 时会自动退回 `cmd /c`，不影响启动。
+**实现上没有逐个 kill PID，用的是 Job Object。** 托盘按 `[napcat].shell` 选外壳：`cmd`（`cmd /c`）、`pwsh`（Windows PowerShell 5.1，`powershell.exe`）、`pwsh7`（PowerShell 7，`pwsh.exe`）。三档都只是换外层窗口，`.bat` 仍由系统隐式调 `cmd.exe` 解释，进程树是 `<外壳> → cmd → NapCatWinBootMain.exe → QQ.exe（+ 若干渲染子进程）`。逐 PID 清理容易漏、也会被 PID 复用坑到，所以 Job Object 设上 `KILL_ON_JOB_CLOSE`：本进程退出 → 句柄关闭 → 整棵树一起结束。找不到指定的外壳程序时自动降级 `cmd /c`，不影响启动。
 
-pwsh 7 默认 UTF-8，控制台里的字符画二维码能直接看清，**这时不会自动弹出二维码图片**；只有回退到 cmd 时才把 `cache/qrcode.png` 弹出来（cmd 的字体和编码容易把字符画渲染成乱码）。
+**二维码图片按外壳决定**：只有 `pwsh`（5.1）不弹，直接看控制台字符画；`cmd` 和 `pwsh7` 都会把 `cache/qrcode.png` 弹出来。托盘「设置」里点「启动外壳：…」循环切换，也可以 `--set napcat.shell=pwsh7`。
 
 ---
 
