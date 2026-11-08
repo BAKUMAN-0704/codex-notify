@@ -11,9 +11,10 @@ use crate::qq;
 use crate::text::clip;
 
 /// 打印用法。路径都是运行时算出来的，所以显示的一定是本机真实位置。
+/// 版本号取自 Cargo.toml，避免改了版本却忘了改这里。
 pub fn usage() {
     println!(
-        r#"codex-notify 0.1.0 — Codex 回合完成 -> QQ 通知
+        r#"codex-notify {} — Codex 回合完成 -> QQ 通知
 
 用法:
   codex-notify.exe '<事件JSON>'   由 Codex 的 notify 钩子调用
@@ -25,6 +26,7 @@ pub fn usage() {
 
 配置文件: {}
 日志文件: {}\notify.log"#,
+        env!("CARGO_PKG_VERSION"),
         config_path().display(),
         data_dir().display()
     );
