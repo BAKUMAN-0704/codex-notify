@@ -67,9 +67,17 @@ Codex 的 `notify` **全局只有一个槽位**。而 Codex 桌面版默认把�
 ### 方式一：下载预编译版本（推荐）
 
 1. 打开 [**Releases**](https://github.com/BAKUMAN-0704/codex-notify/releases)，在最新版本的 **Assets** 里下载 `codex-notify.exe`
-2. 放到一个固定的目录，比如 `C:\Users\<你>\.codex\bin\`
+2. 放到**任意一个你喜欢的固定目录**。目录位置完全随你，常见的选择有：
 
-   放固定目录是有原因的：后面 `config.toml` 里要写死这个路径，放在临时目录（下载文件夹、桌面）容易被清理掉，钩子就静默失效了。
+   ```
+   C:\Users\<你>\.codex\bin\codex-notify\     # 跟 Codex 配置放一起
+   D:\tools\codex-notify\                      # 独立工具目录
+   D:\repo\codex-notify\                       # 直接从源码目录跑
+   ```
+
+   唯一的要求：**后面 `config.toml` 里写的路径要和它一致**。
+
+   > 为什么强调“固定”：那个路径会被写死在 Codex 的配置里。如果放在下载文件夹或桌面，哪天被清理掉，钩子就静默失效了——Codex 不会报错，只是再也不通知你。
 
 3. 可选：核对文件完整性。Release 说明里有 SHA256，用 PowerShell 算一遍对比：
 
@@ -89,10 +97,10 @@ cd codex-notify
 cargo build --release
 ```
 
-产物在 `target/release/codex-notify.exe`（为什么不用 `target/release/` 直接跑：`cargo clean` 会把它删掉，钩子就断了）。把它复制到固定目录再用：
+产物在 `target/release/codex-notify.exe`。**别直接在 `target\release\` 里跑**——`cargo clean` 会把它删掉，钩子就断了。复制到你选定的目录：
 
 ```powershell
-copy target\release\codex-notify.exe $env:USERPROFILE\.codex\bin\
+copy target\release\codex-notify.exe D:\tools\codex-notify\      # 换成你的目录
 ```
 
 > 下面的配置步骤，两种方式完全相同。
@@ -147,16 +155,34 @@ access_token = "你设的token"
 target = "private:123456789"
 ```
 
-> **配置文件放在哪？** 默认在 exe 同目录，日志（`notify.log`）也写在这里。想换位置就设环境变量 `CODEX_NOTIFY_DIR` 指向目标目录。从 `target/release` 里直接运行时，会自动往上两级找配置，方便开发调试。
+> **配置文件放在哪？** 默认在 exe 同目录，日志（`notify.log`）也写在这里。想换位置见下一节。
 
 其余字段的含义见下方[配置项](#配置项)表，一开始不用动。
 
+#### 配置文件与日志放在哪
+
+默认都在 **exe 所在目录**：`notify.toml` 和 `notify.log`。
+
+如果不想让配置文件散落在工具目录里，可以把它挪走：设一个环境变量 `CODEX_NOTIFY_DIR` 指向目标目录，配置和日志会一起跟过去。
+
+```powershell
+setx CODEX_NOTIFY_DIR "D:\my-config\codex-notify"
+```
+
+三个注意点：
+
+- `setx` 写的是**用户级环境变量**，设完要**新开终端**才生效。Codex 拉起钩子时继承的就是这个用户环境变量。
+- 只在某个终端窗口里 `$env:CODEX_NOTIFY_DIR = ...` **不够**——那个变量只存在于当前窗口，Codex 的进程看不到。
+- 换目录后 `notify.toml` 要自己搬过去，程序不会自动迁移；找不到配置时它会用内置默认值，表现是「不发消息、也不报错」，容易误判。
+
+查找顺序（先命中先用）：`CODEX_NOTIFY_DIR` → exe 同目录 → exe 的上两级。最后一条是为了让 `target\release` 里的产物也能找到项目根的配置，方便开发调试。
+
 ### 第三步：接管 Codex 的 notify 槽位
 
-编辑 `~/.codex/config.toml`，**在顶层**（不是 `[tui]` 下面）加一行：
+编辑 `~/.codex/config.toml`，**在顶层**（不是 `[tui]` 下面）加一行，路径指向你实际存放 exe 的位置：
 
 ```toml
-notify = ['C:\Users\<你>\.codex\bin\codex-notify.exe']
+notify = ['D:\tools\codex-notify\codex-notify.exe']
 ```
 
 两个容易踩的点：
