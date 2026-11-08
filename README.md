@@ -1,8 +1,12 @@
-# codex-notify
+<p align="center">
+  <img src="assets/icon-circle-512.png" width="112" alt="codex-notify">
+</p>
 
-> Codex 每完成一个回合，把结果推到你的 QQ。
+<h1 align="center">codex-notify</h1>
 
-一个很小的 Rust 程序（约 0.7 MB、单文件、无运行时依赖），挂在 Codex 的 `notify` 钩子上。当 Codex 干完活、等你回话的时候，你手机上会收到一条这样的消息：
+<p align="center">Codex 每完成一个回合，把结果推到你的 QQ。</p>
+
+一个很小的 Rust 程序（约 0.85 MB、单文件、无运行时依赖），挂在 Codex 的 `notify` 钩子上。当 Codex 干完活、等你回话的时候，你手机上会收到一条这样的消息：
 
 ```
 [Codex] 任务完成 · notify
@@ -102,6 +106,8 @@ cargo build --release
 ```powershell
 copy target\release\codex-notify.exe D:\tools\codex-notify\      # 换成你的目录
 ```
+
+> 编译时 `build.rs` 会把 `assets/codex-notify.ico` 嵌进 exe（任务栏和资源管理器里显示的就是它）。这一步需要 Windows SDK 里的 `rc.exe`；如果你的机器上找不到，只会打一条 warning 然后继续，产物正常可用、只是图标是默认的。想手动指定路径就设 `CODEX_NOTIFY_RC_DIR` 指向含 `rc.exe` 的目录。
 
 > 下面的配置步骤，两种方式完全相同。
 
@@ -331,6 +337,23 @@ token:    (已设置)
 - 在 Windows 上开发和验证，代码本身是跨平台的，但其他平台未测试。
 - 依赖 NapCat 常驻。NapCat 退出、掉线，或者 QQ 自动更新导致注入失效，通知都会中断（`--check` 能看出来）。
 - NapCat 是第三方对 QQ 客户端的协议实现，属于灰色地带，账号有被风控的可能。请自行评估，建议用小号。
+
+---
+
+## 图标
+
+`assets/` 里放着图标源文件：
+
+| 文件 | 用途 |
+|---|---|
+| `icon-1024.png` | 主图标（圆角方形） |
+| `icon-circle-512.png` | 圆形版本，README 顶部用的就是它 |
+| `codex-notify.ico` | 多尺寸 Windows 图标，由 `build.rs` 嵌进 exe |
+| `chevron-mono.svg` | 单色 chevron，给托盘/浅色背景用 |
+| `icon-sheet.png` | 设计说明：各种尺寸和配色的效果预览 |
+| `_build_icon.py` / `_build_ico.py` | 生成脚本，改完图形重新跑一遍即可（需要 Pillow） |
+
+图形语言很简单：深色圆角底 + 白色气泡（你收到的消息）+ 深色 chevron（终端提示符）+ 青色圆点（有新消息）。配色 `#1B2938` / `#F5FAFF` / `#2BD2FF`。
 
 ---
 
