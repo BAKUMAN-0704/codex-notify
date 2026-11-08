@@ -18,6 +18,7 @@ pub fn usage() {
 
 用法:
   codex-notify.exe '<事件JSON>'   由 Codex 的 notify 钩子调用
+  codex-notify.exe --tray         常驻托盘，右键可测试 / 打开配置 / 退出（仅 Windows）
   codex-notify.exe --test         用一条假事件真发一条，验证整条链路
   codex-notify.exe --dry-run      只打印将要发送的内容，不发请求
   codex-notify.exe --init         生成默认配置（放在 exe 旁边）

@@ -13,6 +13,7 @@
 //!
 //! 因此本程序是一个**一次性进程**：启动 → 干活 → 退出。
 //! 没有常驻、没有异步运行时，所有事情在一个线程里顺序做完。
+//! （想让它常驻托盘可以加 `--tray`，见下方 `tray` 模块。）
 //!
 //! # 三条不可违反的红线
 //!
@@ -34,7 +35,13 @@
 //! | `qq`      | OneBot HTTP 发送与探测 |
 //! | `chain`   | 把事件转发给原本占用 notify 槽位的程序 |
 //! | `cli`     | `--init` / `--check` / `--help` |
+//! | `tray`    | `--tray` 常驻托盘（仅 Windows） |
 //! | `clock` `logfile` `text` | 时间、日志、文本小工具 |
+
+// 编译成 GUI 子系统：Codex 每回合拉起本程序时不再闪一个黑色控制台窗口。
+// 代价是命令行模式要看输出就得靠 tray::ensure_console() 去附着父进程控制台，
+// 这一步在 main 开头无条件执行。
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod chain;
 mod cli;
@@ -47,6 +54,9 @@ mod message;
 mod qq;
 mod text;
 
+#[cfg(windows)]
+mod tray;
+
 use std::env;
 use std::time::Duration;
 
@@ -57,6 +67,11 @@ use message::compose;
 
 /// 程序入口。所有分支都从这里分出去，但每条分支都以「立即返回」结束。
 fn main() {
+    // GUI 子系统的进程没有控制台，先从父进程那里借一个过来，
+    // 否则 `--check` 之类从终端调用时会一个字都看不到。
+    #[cfg(windows)]
+    tray::ensure_console();
+
     // 跳过第 0 个参数（程序自身路径）
     let args: Vec<String> = env::args().skip(1).collect();
 
@@ -85,6 +100,13 @@ fn main() {
 
     if flag == "--check" {
         cli::check(&cfg);
+        return;
+    }
+
+    // 常驻托盘：跑起来就一直待着，直到用户在菜单里点「退出」
+    #[cfg(windows)]
+    if flag == "--tray" {
+        tray::run(cfg);
         return;
     }
 
@@ -144,7 +166,7 @@ fn main() {
 /// 失败处理原则：记日志 + 往 stderr 说一句，然后正常返回（退出码 0）。
 /// 不用非 0 退出码，是因为 Codex 可能把它当成「钩子执行失败」而报错，
 /// 但我们只是「少发了一条通知」，不构成需要用户处理的故障。
-fn deliver(cfg: &Config, msg: &message::Message, cwd: &str) {
+pub(crate) fn deliver(cfg: &Config, msg: &message::Message, cwd: &str) {
     // target 为空视同没配置：这样想临时关掉通知，清空那一行就够了
     let Some(qq_cfg) = cfg.qq.as_ref().filter(|q| !q.target.trim().is_empty()) else {
         log("未配置 [qq].target，跳过发送");
