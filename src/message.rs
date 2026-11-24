@@ -233,7 +233,8 @@ fn compose_agy_inner(
 
     // fullyIdle = false 表示后台还有命令/子任务在跑，这一轮并没有真的收尾。
     // 这种 Stop 之后通常还会再来一次，看到「后台仍在运行」就知道先别急着看结果。
-    if ev.fully_idle == Some(false) {
+    // 出错时不标：消息的重点是「为什么挂的」，再缀一句「后台仍在运行」只会添乱。
+    if ev.fully_idle == Some(false) && !ev.is_error() {
         meta.push_str(" · 后台仍在运行");
     }
 

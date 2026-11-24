@@ -147,6 +147,10 @@ pub fn check(cfg: &Config) {
         "agy:       enabled={} / summary_source={} / show_model={} / prefix={}",
         agy.enabled, agy.summary_source, agy.show_model, agy.prefix
     );
+    println!(
+        "agy 通知:  完成={} / 出错={} / 步数上限中止={} / 等待中={}",
+        agy.notify_done, agy.notify_error, agy.notify_aborted, agy.notify_pending
+    );
     println!();
 
     println!("== QQ（走本机 NapCat）==");

@@ -143,6 +143,28 @@ pub struct Agy {
     /// 超时也还是会发一条，只是标题会写明后台仍在运行 —— 宁可多发，不漏。
     #[serde(default = "default_agy_wait")]
     pub wait_seconds: u64,
+
+    /// 任务真的干完了，发不发。默认发。
+    #[serde(default = "yes")]
+    pub notify_done: bool,
+
+    /// 任务出错，发不发。默认发。
+    ///
+    /// 出错是终态，不会再被「还没收工」的筛选扣下 —— 只要这一项开着，
+    /// 当场就发，不等后台复查。
+    #[serde(default = "yes")]
+    pub notify_error: bool,
+
+    /// 到达步数上限而中止（活没做完），发不发。默认不发。
+    #[serde(default)]
+    pub notify_aborted: bool,
+
+    /// 「还没收工」「长时间没结尾」这类占位通知，发不发。默认不发。
+    ///
+    /// 关掉只影响这两种措辞：`fullyIdle = false` 时托盘没在跑，
+    /// 或者复查等到超时。补发「真的干完了」的那条不受影响。
+    #[serde(default)]
+    pub notify_pending: bool,
 }
 
 impl Default for Agy {
@@ -154,6 +176,10 @@ impl Default for Agy {
             show_model: true,
             only_when_finished: true,
             wait_seconds: default_agy_wait(),
+            notify_done: true,
+            notify_error: true,
+            notify_aborted: false,
+            notify_pending: false,
         }
     }
 }
@@ -460,4 +486,11 @@ only_when_finished = true
 # 判成还没收工时，后台隔 15 秒复查一次，最多等这么多秒；
 # 超时仍会发一条，只是标题写明后台仍在运行
 wait_seconds = 900
+# 哪几类事件发通知。前两项默认开：真的干完、或者挂掉，是必须知道的
+notify_done = true
+notify_error = true
+# 到达步数上限而中止（活没做完）
+notify_aborted = false
+# 「还没收工」「长时间没结尾」这类占位通知
+notify_pending = false
 "#;

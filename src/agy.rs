@@ -117,22 +117,32 @@ impl Event {
             .is_some_and(|e| !e.trim().is_empty())
     }
 
-    /// 结束原因对应的说法，返回 (标题里的词, 正文里的词)。
-    ///
-    /// `max_steps_exceeded` 单独拎出来：它是「跑到步数上限」而不是「干完了」，
-    /// 混成一句「任务完成」会误导人 —— 活其实没做完。
-    pub fn outcome(&self) -> (&'static str, &'static str) {
+    /// 这次 Stop 属于哪一类。通知开关按这个分类走。
+    pub fn kind(&self) -> Kind {
         if self.is_error() {
-            return ("任务出错", "出错");
+            return Kind::Error;
         }
         let reason = self
             .termination_reason
             .as_deref()
             .map(|r| r.to_ascii_lowercase())
             .unwrap_or_default();
-        match reason.as_str() {
-            "max_steps_exceeded" => ("任务中止", "中止（达到步数上限）"),
-            _ => ("任务完成", "完成"),
+        if reason == "max_steps_exceeded" {
+            Kind::Aborted
+        } else {
+            Kind::Done
+        }
+    }
+
+    /// 结束原因对应的说法，返回 (标题里的词, 正文里的词)。
+    ///
+    /// `max_steps_exceeded` 单独拎出来：它是「跑到步数上限」而不是「干完了」，
+    /// 混成一句「任务完成」会误导人 —— 活其实没做完。
+    pub fn outcome(&self) -> (&'static str, &'static str) {
+        match self.kind() {
+            Kind::Error => ("任务出错", "出错"),
+            Kind::Aborted => ("任务中止", "中止（达到步数上限）"),
+            Kind::Done => ("任务完成", "完成"),
         }
     }
 
@@ -142,6 +152,41 @@ impl Event {
             .as_deref()
             .map(|e| e.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|e| !e.is_empty())
+    }
+}
+
+/// 这次 Stop 属于哪一类。配置里的 `notify_*` 开关就是按它分流的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// 真的干完了
+    Done,
+    /// 到达步数上限而停下，活没做完
+    Aborted,
+    /// 出错结束
+    Error,
+}
+
+impl Kind {
+    /// 日志里用的说法
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::Done => "完成",
+            Kind::Aborted => "中止",
+            Kind::Error => "出错",
+        }
+    }
+}
+
+/// 这类事件要不要发通知。
+///
+/// 默认只发「完成」和「出错」—— 这两件是必须知道的；
+/// 「步数上限中止」和「还没收工的占位通知」默认静音，嫌吵的人不用管，
+/// 想全都要的把对应开关打开即可。
+fn wants(agy: &Agy, kind: Kind) -> bool {
+    match kind {
+        Kind::Done => agy.notify_done,
+        Kind::Error => agy.notify_error,
+        Kind::Aborted => agy.notify_aborted,
     }
 }
 
@@ -378,6 +423,18 @@ pub fn verdict(ev: &Event) -> Verdict {
     }
 }
 
+/// 在实际配置下，这次 Stop 到底等不等。
+///
+/// 出错是终态，直接放行：出错时日志最后一条往往是 `ERROR_MESSAGE`，
+/// 若照常判成「还没收工」，这条最该看到的通知会被扣住。
+fn verdict_for(ev: &Event, agy: &Agy) -> Verdict {
+    if ev.kind() == Kind::Error || !agy.only_when_finished {
+        Verdict::Done
+    } else {
+        verdict(ev)
+    }
+}
+
 /// 读文件，超过 8 MB 只读尾部。
 ///
 /// 会话日志会随着对话一直追加，长会话能到几十 MB。
@@ -492,20 +549,28 @@ fn handle(dry_run: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    // 这次 Stop 到底是「收工」还是「喘口气」，先问清楚再决定发不发
-    let verdict = if agy.only_when_finished {
-        verdict(&ev)
-    } else {
-        Verdict::Done
-    };
+    // 这次 Stop 到底是「收工」还是「喘口气」，先问清楚再决定发不发。
+    let kind = ev.kind();
+    let verdict = verdict_for(&ev, &agy);
 
     log(&format!(
-        "agy: 会话 {} · {} · 原因 {} · 判定 {:?}",
+        "agy: 会话 {} · {} · 原因 {} · 类别 {} · 判定 {:?}",
         short_id(&ev.conversation_id),
         ev.model_name,
         ev.termination_reason.as_deref().unwrap_or("(未提供)"),
+        kind.label(),
         verdict
     ));
+
+    // 这一类事件被关掉了：不发，也不必挂起。
+    // 顺手把同一会话的待复查撤掉 —— 后来这次 Stop 已经取代它了。
+    if !wants(&agy, kind) {
+        log(&format!("agy: {} 这一类没开通知，跳过", kind.label()));
+        if !dry_run {
+            forget_retry(&ev.conversation_id);
+        }
+        return Ok(());
+    }
 
     if let Verdict::Busy(why) = verdict {
         if dry_run {
@@ -513,10 +578,15 @@ fn handle(dry_run: bool) -> Result<(), String> {
         } else {
             log(&format!("agy: 还没收工（{why}），先不发"));
             // 挂不上（托盘没开 / 写不了盘）就还是发出去，
-            // 措辞换成「等待中」，别让这条彻底消失
+            // 措辞换成「等待中」，别让这条彻底消失。
+            // 这类占位通知默认关掉，由 notify_pending 控制。
             if !schedule_retry(raw.trim()) {
-                let msg = crate::message::compose_agy_pending(&ev, &cfg, &agy);
-                crate::deliver(&cfg, &msg, ev.cwd());
+                if agy.notify_pending {
+                    let msg = crate::message::compose_agy_pending(&ev, &cfg, &agy);
+                    crate::deliver(&cfg, &msg, ev.cwd());
+                } else {
+                    log("agy: 托盘没在运行，没人复查，且 notify_pending = false，这次不发");
+                }
             }
         }
         return Ok(());
@@ -580,7 +650,7 @@ fn schedule_retry(raw: &str) -> bool {
     // 托盘不在就没人复查。这时候扣着不发等于漏报，
     // 不如立刻发出去 —— 至少让人知道有进展，点开看一眼即可。
     if !tray_alive() {
-        log("agy: 托盘没在运行，没人复查，直接发");
+        log("agy: 托盘没在运行，没人复查，没法挂起");
         return false;
     }
 
@@ -665,18 +735,27 @@ fn check_pending(path: &Path, cfg: &Config, agy: &Agy) {
         && (ev.fully_idle != Some(false) || grew);
 
     if ready {
+        let _ = fs::remove_file(path);
+        // 复查期间配置可能被改过，这里再问一次
+        if !wants(agy, ev.kind()) {
+            log("agy: 复查确认收工，但这一类没开通知，丢掉");
+            return;
+        }
         log("agy: 复查确认收工，补发");
         let msg = crate::message::compose_agy(&ev, cfg, agy);
         crate::deliver(cfg, &msg, ev.cwd());
-        let _ = fs::remove_file(path);
         return;
     }
 
     if age.as_secs() >= agy.wait_seconds {
-        log("agy: 复查超时，改发「等待中」");
-        let msg = crate::message::compose_agy_pending(&ev, cfg, agy);
-        crate::deliver(cfg, &msg, ev.cwd());
         let _ = fs::remove_file(path);
+        if agy.notify_pending {
+            log("agy: 复查超时，改发「等待中」");
+            let msg = crate::message::compose_agy_pending(&ev, cfg, agy);
+            crate::deliver(cfg, &msg, ev.cwd());
+        } else {
+            log("agy: 复查超时，notify_pending = false，丢掉");
+        }
     }
 }
 
@@ -955,8 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn error_reason_is_case_insensitive() {
-        // 2.x 实际下发的是大写
+    fn error_reason_is_case_insensitive() {        // 2.x 实际下发的是大写
         let ev = Event {
             termination_reason: Some("ERROR".into()),
             ..Default::default()
@@ -977,5 +1055,68 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ev.outcome().0, "任务中止");
+    }
+
+    #[test]
+    fn kind_covers_three_cases() {
+        let mk = |reason: Option<&str>, error: Option<&str>| Event {
+            termination_reason: reason.map(String::from),
+            error: error.map(String::from),
+            ..Default::default()
+        };
+
+        assert_eq!(mk(None, None).kind(), Kind::Done);
+        assert_eq!(mk(Some("NO_TOOL_CALL"), None).kind(), Kind::Done);
+        assert_eq!(mk(Some("model_stop"), None).kind(), Kind::Done);
+        assert_eq!(mk(Some("MAX_STEPS_EXCEEDED"), None).kind(), Kind::Aborted);
+        assert_eq!(mk(Some("ERROR"), None).kind(), Kind::Error);
+        // 只有 error 字段也算出错
+        assert_eq!(mk(None, Some("boom")).kind(), Kind::Error);
+    }
+
+    #[test]
+    fn error_is_never_held_back() {
+        // 出错时日志最后一条常是 ERROR_MESSAGE，按尾巴判是 Busy；
+        // 但出错是终态，必须当场发，不能被「还没收工」扣住
+        let p = tmp_transcript("error-tail", &[r#"{"type":"ERROR_MESSAGE","content":"boom"}"#]);
+        let ev = Event {
+            termination_reason: Some("ERROR".into()),
+            transcript_path: p,
+            fully_idle: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(verdict(&ev), Verdict::Busy("后台任务还在运行"));
+        assert_eq!(verdict_for(&ev, &Agy::default()), Verdict::Done);
+
+        // 普通「完成」还是照常筛
+        let ev = Event {
+            termination_reason: Some("NO_TOOL_CALL".into()),
+            fully_idle: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(verdict_for(&ev, &Agy::default()), Verdict::Busy("后台任务还在运行"));
+    }
+
+    #[test]
+    fn notify_defaults_only_cover_done_and_error() {
+        let agy = Agy::default();
+        assert!(wants(&agy, Kind::Done));
+        assert!(wants(&agy, Kind::Error));
+        assert!(!wants(&agy, Kind::Aborted));
+
+        let all_on = Agy {
+            notify_aborted: true,
+            notify_pending: true,
+            ..Agy::default()
+        };
+        assert!(wants(&all_on, Kind::Aborted));
+
+        let quiet = Agy {
+            notify_done: false,
+            notify_error: false,
+            ..Agy::default()
+        };
+        assert!(!wants(&quiet, Kind::Done));
+        assert!(!wants(&quiet, Kind::Error));
     }
 }

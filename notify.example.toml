@@ -96,3 +96,13 @@ show_model = true
 only_when_finished = true
 # 复查最多等这么多秒，超时仍会发一条，标题写「等待中」
 wait_seconds = 900
+# 哪几类事件发通知。前两项默认开：真的干完、或者挂掉，是必须知道的；
+# 后两项默认静音，嫌吵就不用管。
+#   完成（真的收工了）
+notify_done = true
+#   出错（出错是终态，不会被上面的收工筛选扣住，当场就发）
+notify_error = true
+#   到达步数上限而中止（活没做完）
+notify_aborted = false
+#   「还没收工」「长时间没结尾」这类占位通知
+notify_pending = false
