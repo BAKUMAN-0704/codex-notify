@@ -463,7 +463,7 @@ fn read_limited(path: &Path) -> Option<String> {
 ///
 /// ```text
 /// <USER_REQUEST>
-/// 帮我看下这段代码……
+/// 帮我把这个模块的日志补上……
 /// </USER_REQUEST>
 /// <ADDITIONAL_METADATA>…</ADDITIONAL_METADATA>
 /// ```

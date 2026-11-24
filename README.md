@@ -414,7 +414,7 @@ Codex 会在 `~/.codex/sessions/年/月/日/rollout-...-<thread-id>.jsonl` 的�
 想核对某个事件会被怎么处理：
 
 ```bash
-codex-notify.exe --classify 33333333-3333-4333-8333-333333333333
+codex-notify.exe --classify 11111111-1111-4111-8111-111111111111
 # thread_source: subagent
 # 判定:         子 Agent / 内部回合
 # 结果:         会跳过通知

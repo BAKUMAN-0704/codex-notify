@@ -236,7 +236,7 @@ mod tests {
         fs::create_dir_all(&old).unwrap();
         fs::create_dir_all(&today).unwrap();
 
-        let id = "22222222-2222-4222-8222-222222222222";
+        let id = "11111111-1111-4111-8111-111111111111";
         let exact = old.join(format!("rollout-2026-10-19T20-47-37-{id}.jsonl"));
         fs::write(&exact, b"{}").unwrap();
         // 名字里带该 id 但不是精确结尾（fork 出来的文件）：不该命中
