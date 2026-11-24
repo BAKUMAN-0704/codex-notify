@@ -17,7 +17,7 @@
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -62,7 +62,62 @@ pub(crate) fn codex_home() -> PathBuf {
 /// 不可能匹配到任何文件；另外跨天续聊的会话也可能不在今天的目录里。
 /// 回退拿到的额度虽然未必属于当前回合，但至少是最近的真实数字，比不显示强。
 pub fn read_limits(thread_id: &str) -> Option<Limits> {
+    let id = thread_id.trim();
+
+    // 先按 thread-id 找它自己的 rollout。跨天续聊的老会话可能躺在几个月前的
+    // 目录里，下面 scan_sessions 只看最近两天会漏掉，所以这里全局递归找一次。
+    // 拿到自己的最新快照，比回退到「当天其它会话」的旧快照准得多。
+    if !id.is_empty() {
+        if let Some(path) = find_rollout(id) {
+            if let Some(l) = limits_from_tail(&path) {
+                return Some(l);
+            }
+        }
+    }
+
+    // 兜底：老逻辑（最近两天按 id 找）→ 当天最新会话
     scan_sessions(thread_id).or_else(|| scan_sessions(""))
+}
+
+/// 在 sessions/ 下递归找「文件名以 -<thread-id>.jsonl 结尾」的 rollout。
+///
+/// 用精确后缀而不是 contains：fork 出来的会话文件名可能带两个 UUID，
+/// contains 会误命中别的 thread。命中多个时取 mtime 最新的那个。
+/// 只读目录项，几百个日期目录也就几十毫秒；文件内容仍只读尾部 512KB。
+fn find_rollout(thread_id: &str) -> Option<PathBuf> {
+    find_rollout_in(&codex_home().join("sessions"), thread_id)
+}
+
+fn find_rollout_in(root: &Path, thread_id: &str) -> Option<PathBuf> {
+    let suffix = format!("-{thread_id}.jsonl");
+    let mut hits: Vec<(SystemTime, PathBuf)> = Vec::new();
+    walk_days(root, 0, &suffix, &mut hits);
+    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.into_iter().next().map(|(_, p)| p)
+}
+
+fn walk_days(dir: &Path, depth: usize, suffix: &str, out: &mut Vec<(SystemTime, PathBuf)>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_days(&path, depth + 1, suffix, out);
+        } else if path.extension().is_some_and(|x| x == "jsonl")
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(suffix))
+        {
+            if let Ok(mtime) = fs::metadata(&path).and_then(|m| m.modified()) {
+                out.push((mtime, path));
+            }
+        }
+    }
 }
 
 /// 在最近两天的会话目录里找匹配的文件，取最后一条额度快照。
@@ -165,4 +220,33 @@ fn limits_from_tail(path: &PathBuf) -> Option<Limits> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_old_session_file_by_exact_thread_id() {
+        let root = std::env::temp_dir()
+            .join(format!("codex-notify-limits-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let old = root.join("2026").join("10").join("19");
+        let today = root.join("2026").join("11").join("09");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&today).unwrap();
+
+        let id = "22222222-2222-4222-8222-222222222222";
+        let exact = old.join(format!("rollout-2026-10-19T20-47-37-{id}.jsonl"));
+        fs::write(&exact, b"{}").unwrap();
+        // 名字里带该 id 但不是精确结尾（fork 出来的文件）：不该命中
+        fs::write(today.join(format!("rollout-{id}_extra.jsonl")), b"{}").unwrap();
+        // 别的 thread：不该命中
+        fs::write(today.join("rollout-2026-11-09T10-00-00-other.jsonl"), b"{}").unwrap();
+
+        assert_eq!(find_rollout_in(&root, id).as_deref(), Some(exact.as_path()));
+        assert_eq!(find_rollout_in(&root, "no-such-id"), None);
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

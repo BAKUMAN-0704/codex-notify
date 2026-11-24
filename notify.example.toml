@@ -12,6 +12,9 @@ enabled = true
 # 但它们不代表「活干完了」。按 thread-id 查会话日志的 thread_source 判定；
 # 查不到就照常通知，宁可多发也不漏推真正的完成。
 only_main_agent = true
+# 内部辅助回合（生成建议/标题等）也会触发 notify，但主任务没结束。
+# 判据：回复是合法 JSON，且该 thread 既没有会话日志也没有会话名。
+ignore_internal_turns = true
 # 摘要内容："thread" 显示 Codex 会话名，"message" 显示最后一条回复，"none" 不显示
 # 会话名从 ~/.codex/session_index.jsonl 读，读不到时自动退回最后一条回复
 summary_source = "thread"
@@ -72,3 +75,24 @@ command = []
 shell = "pwsh"
 # 退出托盘时是否结束 NapCat（只针对上面这条命令启动的那个）
 kill_on_exit = true
+
+# ---- Antigravity（agy）的 Stop 钩子 ----
+#
+# 装法：codex-notify.exe --init-agy
+# 它会往 ~/.gemini/config/hooks.json 写一个 Stop 处理器。
+# 这一段只影响 --agy 那条路径，Codex 的钩子不看它。
+[agy]
+# 关掉后仍然会回 {"decision":"stop"}，只是不发消息
+enabled = true
+prefix = "[Antigravity]"
+# "title" 会话标题 / "input" 你这轮最后一句 / "message" 最后一条回复 / "none"
+summary_source = "title"
+# 时间后面是否带模型名（gemini-3.6-flash-medium）
+show_model = true
+# 只在真的收工时发。Stop 每结束一次执行循环都会触发，
+# 而 Antigravity 会自己接着跑下一轮 —— 关掉就会在「工具刚返回」
+# 或者「正在等后台计算」的时候收到「任务完成」。
+# 判成还没收工的事件由托盘每 15 秒复查一次；托盘没开就直接发。
+only_when_finished = true
+# 复查最多等这么多秒，超时仍会发一条，标题写「等待中」
+wait_seconds = 900

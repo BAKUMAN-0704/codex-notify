@@ -30,6 +30,14 @@ pub struct Config {
     #[serde(default = "yes")]
     pub only_main_agent: bool,
 
+    /// 是否跳过 Codex 的内部辅助回合（默认开）。
+    ///
+    /// 这些回合输出 `{"suggestions":…}` / `{"exclude":[]}` 之类的结构化 JSON，
+    /// 也会触发 notify，但主任务其实没结束；它们的 thread 没有会话日志/会话名。
+    /// 判据要求「合法 JSON + 三无 thread」，正常会话里用户要的 JSON 回答不受影响。
+    #[serde(default = "yes")]
+    pub ignore_internal_turns: bool,
+
     /// 摘要位置显示什么：
     ///   "thread"  —— Codex 给会话起的名字（默认，读 session_index.jsonl）
     ///   "message" —— 原来的「最后一条回复 / 用户指令」
@@ -84,6 +92,70 @@ pub struct Config {
     /// NapCat 托管配置。整段不写就是不管它。
     #[serde(default)]
     pub napcat: Option<Napcat>,
+
+    /// Antigravity 钩子配置。整段不写就用默认值（启用）。
+    ///
+    /// 只在 `--agy` 这条路径上生效，Codex 的钩子完全不看它。
+    #[serde(default)]
+    pub agy: Option<Agy>,
+}
+
+/// Antigravity（`--agy`）的独立配置。
+///
+/// 为什么不复用顶层那几项：两边的「额度」和「摘要来源」根本不是一个东西。
+/// Codex 有 5h/周额度快照，Antigravity 没有；Codex 的摘要来自
+/// `session_index.jsonl`，Antigravity 来自 `annotations/<id>.pbtxt`。
+/// 混在一起会让两边都变得难解释。
+#[derive(Debug, Deserialize, Clone)]
+pub struct Agy {
+    /// 是否处理 Antigravity 的 Stop 事件。
+    /// 关掉后仍会输出 `{"decision":"stop"}`，只是不发消息。
+    #[serde(default = "yes")]
+    pub enabled: bool,
+
+    /// 标题前缀，默认 `[Antigravity]`
+    #[serde(default = "default_agy_prefix")]
+    pub prefix: String,
+
+    /// 摘要显示什么：
+    ///   "title"   —— 会话标题（默认，读 `annotations/<id>.pbtxt`）
+    ///   "input"   —— 你这轮最后一句输入
+    ///   "message" —— Antigravity 最后一条回复（读 transcript.jsonl）
+    ///   "none"    —— 不显示
+    #[serde(default = "default_agy_summary")]
+    pub summary_source: String,
+
+    /// 是否在时间后面带上模型名（`gemini-3.6-flash-medium`）
+    #[serde(default = "yes")]
+    pub show_model: bool,
+
+    /// 只在真的收工时发通知。
+    ///
+    /// Stop 钩子每结束一次执行循环就会触发，而 Antigravity 的循环
+    /// 经常自己接着跑下一轮 —— 不筛一下就会在「工具刚返回」
+    /// 或者「正在等后台计算」的时候收到「任务完成」。
+    ///
+    /// 关掉就退回旧行为：每次 Stop 都发。
+    #[serde(default = "yes")]
+    pub only_when_finished: bool,
+
+    /// 判成「还没收工」时，后台隔 15 秒复查一次，最多等这么多秒。
+    /// 超时也还是会发一条，只是标题会写明后台仍在运行 —— 宁可多发，不漏。
+    #[serde(default = "default_agy_wait")]
+    pub wait_seconds: u64,
+}
+
+impl Default for Agy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            prefix: default_agy_prefix(),
+            summary_source: default_agy_summary(),
+            show_model: true,
+            only_when_finished: true,
+            wait_seconds: default_agy_wait(),
+        }
+    }
 }
 
 /// NapCat 托管：让托盘启动时一并拉起它，退出时一起结束。
@@ -164,6 +236,16 @@ fn default_summary_source() -> String {
     "thread".to_string()
 }
 
+fn default_agy_prefix() -> String {
+    "[Antigravity]".to_string()
+}
+fn default_agy_summary() -> String {
+    "title".to_string()
+}
+fn default_agy_wait() -> u64 {
+    900
+}
+
 fn default_shell() -> String {
     "pwsh".to_string()
 }
@@ -197,6 +279,7 @@ impl Config {
         Config {
             enabled: true,
             only_main_agent: true,
+            ignore_internal_turns: true,
             summary_source: default_summary_source(),
             max_chars: default_max_chars(),
             timeout_secs: default_timeout(),
@@ -208,7 +291,13 @@ impl Config {
             chain: Vec::new(),
             qq: None,
             napcat: None,
+            agy: None,
         }
+    }
+
+    /// Antigravity 那一段的配置，缺省时用默认值（启用）。
+    pub fn agy_config(&self) -> Agy {
+        self.agy.clone().unwrap_or_default()
     }
 }
 
@@ -322,6 +411,9 @@ enabled = true
 # 但它们不代表「活干完了」。按 thread-id 查会话日志的 thread_source 判定；
 # 查不到就照常通知，宁可多发也不漏推真正的完成。
 only_main_agent = true
+# 内部辅助回合（生成建议/标题等）也会触发 notify，但主任务没结束。
+# 判据：回复是合法 JSON，且该 thread 既没有会话日志也没有会话名。
+ignore_internal_turns = true
 # 摘要内容："thread" 显示 Codex 会话名，"message" 显示最后一条回复，"none" 不显示
 # 会话名从 ~/.codex/session_index.jsonl 读，读不到时自动退回最后一条回复
 summary_source = "thread"
@@ -351,4 +443,21 @@ base_url = "http://127.0.0.1:3000"
 access_token = ""
 # 发给自己：private:你的QQ号；发到群：group:群号
 target = "private:10001"
+
+# ---- Antigravity（agy）的 Stop 钩子 ----
+# 装法：codex-notify.exe --init-agy（写进 ~/.gemini/config/hooks.json）
+# 这一段只影响 --agy 那条路径，Codex 的钩子不看它
+[agy]
+enabled = true
+prefix = "[Antigravity]"
+# "title" 会话标题 / "input" 你这轮最后一句 / "message" 最后一条回复 / "none"
+summary_source = "title"
+# 时间后面是否带模型名（gemini-3.6-flash-medium）
+show_model = true
+# 只在真的收工时发。Stop 每结束一次执行循环都会触发，
+# 关掉就会在「工具刚返回」「正在等后台计算」时收到「任务完成」
+only_when_finished = true
+# 判成还没收工时，后台隔 15 秒复查一次，最多等这么多秒；
+# 超时仍会发一条，只是标题写明后台仍在运行
+wait_seconds = 900
 "#;

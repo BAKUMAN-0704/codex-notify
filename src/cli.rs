@@ -14,10 +14,12 @@ use crate::text::clip;
 /// 版本号取自 Cargo.toml，避免改了版本却忘了改这里。
 pub fn usage() {
     println!(
-        r#"codex-notify {} — Codex 回合完成 -> QQ 通知
+        r#"codex-notify {} — Codex / Antigravity 任务结束 -> QQ 通知
 
 用法:
   codex-notify.exe '<事件JSON>'   由 Codex 的 notify 钩子调用
+  codex-notify.exe --agy          由 Antigravity 的 Stop 钩子调用（stdin 进、stdout 出）
+  codex-notify.exe --init-agy     把 Stop 钩子写进 ~/.gemini/config/hooks.json
   codex-notify.exe                不带参数启动 = 常驻托盘（仅 Windows）
   codex-notify.exe --set key=value  改一项配置（如 --set show_limits=false）
   codex-notify.exe --classify <id> 查某个 thread-id 会被判为主/子 Agent
@@ -126,7 +128,10 @@ pub fn init_config() {
 /// 这个输出经常被截图贴到聊天里求助，不能把 token 泄露出去。
 pub fn check(cfg: &Config) {
     println!("配置文件: {}", config_path().display());
-    println!("enabled: {} / only_main_agent: {}", cfg.enabled, cfg.only_main_agent);
+    println!(
+        "enabled: {} / only_main_agent: {} / ignore_internal_turns: {}",
+        cfg.enabled, cfg.only_main_agent, cfg.ignore_internal_turns
+    );
     println!("prefix: {}", cfg.prefix);
     println!(
         "show_limits: {} / show_reset: {} / limit_style: {} / show_footer: {} / summary_source: {}",
@@ -136,6 +141,11 @@ pub fn check(cfg: &Config) {
     println!(
         "napcat.shell: {}",
         cfg.napcat.as_ref().map(|n| n.shell.as_str()).unwrap_or("pwsh")
+    );
+    let agy = cfg.agy_config();
+    println!(
+        "agy:       enabled={} / summary_source={} / show_model={} / prefix={}",
+        agy.enabled, agy.summary_source, agy.show_model, agy.prefix
     );
     println!();
 

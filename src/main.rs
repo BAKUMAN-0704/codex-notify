@@ -44,12 +44,14 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod agent;
+mod agy;
 mod chain;
 mod thread_name;
 mod cli;
 mod clock;
 mod config;
 mod event;
+mod internal;
 mod limits;
 mod logfile;
 mod message;
@@ -71,11 +73,6 @@ use message::compose;
 
 /// 程序入口。所有分支都从这里分出去，但每条分支都以「立即返回」结束。
 fn main() {
-    // GUI 子系统的进程没有控制台，先从父进程那里借一个过来，
-    // 否则 `--check` 之类从终端调用时会一个字都看不到。
-    #[cfg(windows)]
-    tray::ensure_console();
-
     // 跳过第 0 个参数（程序自身路径）
     let args: Vec<String> = env::args().skip(1).collect();
 
@@ -87,6 +84,22 @@ fn main() {
         .cloned()
         .unwrap_or_default();
 
+    // Antigravity 的 Stop 钩子走 stdin/stdout：事件从 stdin 进来，
+    // {"decision":"stop"} 从 stdout 出去。
+    //
+    // **必须放在 ensure_console() 之前。** 那个函数会 AttachConsole
+    // 并把标准句柄换成控制台的；一旦换了，Antigravity 就读不到我们写的
+    // decision，它会以为钩子没回话。
+    if flag == "--agy" || flag == "--antigravity" {
+        agy::run(&args);
+        return;
+    }
+
+    // GUI 子系统的进程没有控制台，先从父进程那里借一个过来，
+    // 否则 `--check` 之类从终端调用时会一个字都看不到。
+    #[cfg(windows)]
+    tray::ensure_console();
+
     // --help / --init 不需要读配置，放在最前面，配置坏了也能用
     match flag.as_str() {
         "--help" | "-h" | "/?" => {
@@ -95,6 +108,11 @@ fn main() {
         }
         "--init" => {
             cli::init_config();
+            return;
+        }
+        // 把 Stop 钩子写进 Antigravity 的全局 hooks.json
+        "--init-agy" => {
+            agy::init_hook();
             return;
         }
         _ => {}
@@ -220,6 +238,17 @@ fn main() {
             event.thread_id,
             verdict.origin.label()
         ));
+    }
+
+    // Codex 的内部辅助回合（生成建议、标题、子 Agent 通信）也会发
+    // agent-turn-complete，但主任务并没有结束。输出是结构化 JSON，且 thread
+    // 没有任何会话记录。同样放在 chain 之后：只拦我们自己的消息。
+    if cfg.ignore_internal_turns && internal::is_internal_turn(&event) {
+        log(&format!(
+            "跳过内部回合通知: thread {} · 结构化输出",
+            event.thread_id
+        ));
+        return;
     }
 
     deliver(&cfg, &compose(&event, &cfg), &event.cwd);

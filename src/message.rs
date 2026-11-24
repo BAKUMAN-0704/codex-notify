@@ -6,7 +6,7 @@
 //! 保留结构，以后加通道就不用反过来拆字符串。
 
 use crate::clock::hhmm;
-use crate::config::Config;
+use crate::config::{Agy, Config};
 use crate::event::Event;
 use crate::limits::read_limits;
 use crate::text::{clip, project_name};
@@ -166,6 +166,124 @@ pub fn compose(ev: &Event, cfg: &Config) -> Message {
     }
 
     // 统一去掉尾部空行，避免通道那边多出一个空行
+    Message {
+        title,
+        body: body.trim_end().to_string(),
+    }
+}
+
+/// Antigravity（`--agy`）的版本。
+///
+/// 和 Codex 版的差别：
+/// * **没有额度**。Antigravity 的配额在服务端，本地没有快照可读，
+///   硬塞一个 Codex 的额度只会张冠李戴。
+/// * **多一个模型名**。Antigravity 会切模型（flash / pro），
+///   看一眼就知道这轮是谁干的。
+/// * 结束原因有第三种：跑到步数上限。这时候说「任务完成」是撒谎。
+pub fn compose_agy(ev: &crate::agy::Event, cfg: &Config, agy: &Agy) -> Message {
+    compose_agy_inner(ev, cfg, agy, None)
+}
+
+/// 复查等太久、判断不了收没收工时的兜底消息。
+///
+/// 措辞刻意不用「完成」：这时候只知道它很久没动，不知道是干完了
+/// 还是在等一个跑不完的后台命令。让用户自己点开看一眼，比误报强。
+pub fn compose_agy_pending(ev: &crate::agy::Event, cfg: &Config, agy: &Agy) -> Message {
+    compose_agy_inner(
+        ev,
+        cfg,
+        agy,
+        Some(("等待中", "长时间没有收尾，后台可能仍在运行")),
+    )
+}
+
+fn compose_agy_inner(
+    ev: &crate::agy::Event,
+    cfg: &Config,
+    agy: &Agy,
+    outcome: Option<(&'static str, &'static str)>,
+) -> Message {
+    let (title_word, meta_word) = outcome.unwrap_or_else(|| ev.outcome());
+
+    // 工作区可能为空（纯对话、没挂项目），这时候别在标题尾巴留一个孤零零的「·」
+    let project = project_name(ev.cwd());
+    let mut title = format!("{} {}", agy.prefix, title_word);
+    if !project.is_empty() {
+        title.push_str(" · ");
+        title.push_str(&project);
+    }
+    let title = title.replace(['\n', '\r'], " ").trim().to_string();
+
+    // ---- 第一行：时间 + 结束原因 + 模型（+ 出错原因）----
+    let mut meta = format!("{} {}", hhmm(), meta_word);
+
+    if agy.show_model && !ev.model_name.trim().is_empty() {
+        meta.push_str(" · ");
+        meta.push_str(ev.model_name.trim());
+    }
+
+    // 出错时把原因带上：这类消息最有用的就是「为什么挂的」。
+    // 压成一行再截断 —— 原始信息可能是一大段 HTTP 报错。
+    if ev.is_error() {
+        if let Some(e) = ev.error_line() {
+            meta.push_str(" · ");
+            meta.push_str(&clip(&e, 120));
+        }
+    }
+
+    // fullyIdle = false 表示后台还有命令/子任务在跑，这一轮并没有真的收尾。
+    // 这种 Stop 之后通常还会再来一次，看到「后台仍在运行」就知道先别急着看结果。
+    if ev.fully_idle == Some(false) {
+        meta.push_str(" · 后台仍在运行");
+    }
+
+    let mut body = format!("{meta}\n");
+
+    // ---- 摘要 ----
+    // 默认用会话标题，和 Codex 那边的口径一致：手机上想知道的是
+    // 「哪条线结束了」，不是「它最后说了什么」。
+    // 标题读不到时退回用户最后一句输入，比空着强。
+    let input_summary = || {
+        ev.last_user_input
+            .as_deref()
+            .map(crate::agy::clean_input)
+            .map(|s| clip(&s, cfg.max_chars))
+            .filter(|s| !s.is_empty())
+    };
+
+    let summary = match agy.summary_source.trim().to_ascii_lowercase().as_str() {
+        "none" => None,
+        "input" => input_summary(),
+        "message" => crate::agy::last_reply(&ev.transcript_path)
+            .map(|s| clip(&s, cfg.max_chars))
+            .filter(|s| !s.is_empty())
+            .or_else(input_summary),
+        _ => crate::agy::conversation_title(&ev.conversation_id, &ev.artifact_directory_path)
+            .map(|s| clip(&s, cfg.max_chars))
+            .or_else(input_summary),
+    };
+
+    if let Some(summary) = summary.filter(|s| !s.is_empty()) {
+        body.push_str("---\n");
+        body.push_str(&summary);
+        body.push('\n');
+    }
+
+    // ---- 末尾：会话定位信息 ----
+    if cfg.show_footer {
+        let mut footer = Vec::new();
+        if let Some(n) = ev.execution_num {
+            footer.push(format!("turn {n}"));
+        }
+        if !ev.conversation_id.is_empty() {
+            let short: String = ev.conversation_id.chars().take(8).collect();
+            footer.push(format!("thread {short}"));
+        }
+        if !footer.is_empty() {
+            body.push_str(&format!("({})\n", footer.join(" · ")));
+        }
+    }
+
     Message {
         title,
         body: body.trim_end().to_string(),

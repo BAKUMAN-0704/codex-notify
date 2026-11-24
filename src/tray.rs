@@ -26,6 +26,7 @@ use windows_sys::Win32::System::Console::{
     AttachConsole, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Shell::{
     ExtractIconExW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
     NIM_MODIFY, NOTIFYICONDATAW,
@@ -62,6 +63,7 @@ const ID_CYCLE_TIMEOUT: usize = 17;
 const ID_TOGGLE_MAIN_ONLY: usize = 18;
 const ID_CYCLE_SUMMARY: usize = 19;
 const ID_CYCLE_SHELL: usize = 20;
+const ID_TOGGLE_INTERNAL: usize = 21;
 
 /// 摘要长度的档位。菜单没法输数字，用「点一下换下一档」代替输入框。
 /// 260 是默认档；80 适合只想瞄一眼，600 基本是全文。
@@ -199,6 +201,12 @@ pub fn run(cfg: Config) {
         }
 
         crate::logfile::log("托盘已启动");
+
+        // 3.5 立一个「托盘在跑」的标记。Antigravity 的钩子靠它决定
+        //     要不要把「还没干完」的事件挂起来等复查 —— 没有托盘就没人复查，
+        //     那还不如直接发出去。句柄故意不关，进程退出时系统会回收。
+        let mutex_name = wide("Local\\codex-notify-tray");
+        let _tray_mutex = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
 
         // 4. 定时刷新托盘提示文字。
         //    之前只在创建图标时写一次，结果永远显示启动那一刻的状态
@@ -378,6 +386,14 @@ unsafe extern "system" fn wndproc(
         // 但鼠标悬停的 tooltip 不会自己变，只能靠这个定时器推。
         WM_TIMER => {
             refresh_tip(hwnd);
+
+            // 顺手把 Antigravity 挂起的事件过一遍。定时器 5 秒一跳，
+            // 复查攒够 3 次（15 秒）跑一次：它要读日志尾部，不必太勤。
+            static AGY_TICK: std::sync::atomic::AtomicU32 =
+                std::sync::atomic::AtomicU32::new(0);
+            if AGY_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 3 == 2 {
+                crate::agy::poll_pending();
+            }
             0
         }
         WM_DESTROY => {
@@ -461,6 +477,15 @@ unsafe fn show_menu(hwnd: HWND) {
             MF_STRING
         };
         AppendMenuW(sub, flags, ID_TOGGLE_MAIN_ONLY, main_only_w.as_ptr());
+
+        // 内部辅助回合也会触发 notify，但它们不代表任务完成
+        let internal_w = wide("忽略内部辅助回合");
+        let flags = if cfg_now.ignore_internal_turns {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(sub, flags, ID_TOGGLE_INTERNAL, internal_w.as_ptr());
         AppendMenuW(sub, MF_SEPARATOR, 0, std::ptr::null());
 
         // 第二组：显示相关
@@ -568,6 +593,9 @@ unsafe fn show_menu(hwnd: HWND) {
         ID_TOGGLE_REMAINING => toggle_limit_style(),
         ID_TOGGLE_ENABLED => toggle_bool("enabled", cfg_now.enabled),
         ID_TOGGLE_MAIN_ONLY => toggle_bool("only_main_agent", cfg_now.only_main_agent),
+        ID_TOGGLE_INTERNAL => {
+            toggle_bool("ignore_internal_turns", cfg_now.ignore_internal_turns)
+        }
         ID_TOGGLE_KILL_EXIT => {
             let on = cfg_now.napcat.as_ref().is_some_and(|n| n.kill_on_exit);
             toggle_bool("napcat.kill_on_exit", on);
@@ -605,6 +633,7 @@ fn toggle_bool(key: &str, current: bool) {
         match key {
             "enabled" => c.enabled = new,
             "only_main_agent" => c.only_main_agent = new,
+            "ignore_internal_turns" => c.ignore_internal_turns = new,
             "show_limits" => c.show_limits = new,
             "show_reset" => c.show_reset = new,
             "show_footer" => c.show_footer = new,

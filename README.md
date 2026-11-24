@@ -4,9 +4,9 @@
 
 <h1 align="center">codex-notify</h1>
 
-<p align="center">Codex 每完成一个回合，把结果推到你的 QQ。</p>
+<p align="center">Codex / Antigravity 每完成一个回合，把结果推到你的 QQ。</p>
 
-一个很小的 Rust 程序（约 0.9 MB、单文件、无运行时依赖），挂在 Codex 的 `notify` 钩子上。当 Codex 干完活、等你回话的时候，你手机上会收到一条这样的消息：
+一个很小的 Rust 程序（约 0.9 MB、单文件、无运行时依赖），挂在 Codex 的 `notify` 钩子上（也支持 Antigravity 的 `Stop` 钩子）。当 Codex 干完活、等你回话的时候，你手机上会收到一条这样的消息：
 
 ```
 [Codex] 任务完成 · notify
@@ -44,6 +44,8 @@ codex-notify.exe '{"type":"agent-turn-complete","cwd":"...","thread-id":"..."}'
 
 **它不实现 QQ 协议，也不直接连腾讯服务器。** 真正的发送方是 [NapCat](https://github.com/NapNeko/NapCatQQ)（或 LLOneBot 等任何实现了 OneBot v11 HTTP 接口的程序）。本程序只负责「解析事件 → 拼消息 → 发一个本地 HTTP 请求」。
 
+Antigravity 走的是另一条入口（`--agy`）：事件从 **stdin** 进来，`{"decision":"stop"}` 从 **stdout** 回去。见 [Antigravity](#antigravityagy)。
+
 ### 关于 chain：为什么需要它
 
 Codex 的 `notify` **全局只有一个槽位**。而 Codex 桌面版默认把这个位置用于桌宠动画（`codex-computer-use.exe turn-ended`）。直接覆盖会让桌宠不再响应。
@@ -58,7 +60,8 @@ Codex 的 `notify` **全局只有一个槽位**。而 Codex 桌面版默认把�
 
 | 需要 | 说明 | 什么时候需要 |
 |---|---|---|
-| **Codex** | CLI 或桌面版均可，需要能改 `~/.codex/config.toml` | 必需 |
+| **Codex** | CLI 或桌面版均可，需要能改 `~/.codex/config.toml` | 用 Codex 时必需 |
+| **Antigravity** | App / IDE / CLI 任一，钩子写在 `~/.gemini/config/hooks.json` | 用 Antigravity 时必需 |
 | **NapCat**（或任何 OneBot v11 实现） | 提供 HTTP 接口，且已登录一个 QQ 号 | 必需 |
 | **Rust 1.82+** | 只有「自己编译」才需要，下载预编译版本可以跳过 | 可选 |
 
@@ -258,11 +261,12 @@ token:    (已设置)
 |---|---|---|
 | `enabled` | `true` | 总开关。`false` 时钩子直接退出，不发消息 |
 | `only_main_agent` | `true` | 只通知主 Agent，挡掉子 Agent / 内部审查回合（见[下方专节](#子-agent-也会触发-notify)） |
+| `ignore_internal_turns` | `true` | 挡掉内部辅助回合：回复是合法 JSON 且该 thread 没有会话日志/会话名才跳过，正常会话的 JSON 回答不受影响 |
 | `summary_source` | `"thread"` | 摘要显示什么：`"thread"` 会话名（读 `~/.codex/session_index.jsonl`）、`"message"` 最后一条回复、`"none"` 不显示。查不到会话名会自动退回 `"message"` |
 | `max_chars` | `260` | 摘要截断长度（按**字数**不是字节） |
 | `timeout_secs` | `5` | HTTP 超时。这个值决定回合结束后最多卡多久 |
 | `prefix` | `"[Codex]"` | 消息标题前缀 |
-| `show_limits` | `true` | 是否带 5h / 周额度（只读 Codex 会话日志） |
+| `show_limits` | `true` | 是否带 5h / 周额度（按 `thread-id` 全局只读查找 Codex 会话日志，跨天续聊也能找到自己的快照） |
 | `show_reset` | `true` | 额度后面是否带「什么时候重置」 |
 | `limit_style` | `"used"` | `"used"` 显示已用百分比，`"remaining"` 显示剩余百分比 |
 | `show_footer` | `false` | 是否带末尾的 `(turn N · thread XXXXXXXX)`，多会话并行时才建议开 |
@@ -273,6 +277,12 @@ token:    (已设置)
 | `[napcat].command` | `[]` | 托盘要拉起的 NapCat 启动命令，留空则不托管 |
 | `[napcat].shell` | `"pwsh"` | 启动外壳：`cmd` / `pwsh`（5.1）/ `pwsh7`（7）。找不到对应程序会降级 `cmd`。只有 `pwsh` 不弹二维码图片，另两档会弹 |
 | `[napcat].kill_on_exit` | `true` | 托盘退出时是否一起结束 NapCat |
+| `[agy].enabled` | `true` | 是否处理 Antigravity 的 Stop 事件（关掉后仍回 decision，只是不发消息） |
+| `[agy].prefix` | `"[Antigravity]"` | Antigravity 通知的标题前缀 |
+| `[agy].summary_source` | `"title"` | `title` 会话标题 / `input` 你这轮最后一句 / `message` 最后一条回复 / `none` |
+| `[agy].show_model` | `true` | 时间后面是否带模型名 |
+| `[agy].only_when_finished` | `true` | 只在真的收工时发。关掉就退回「每次 `Stop` 都发」 |
+| `[agy].wait_seconds` | `900` | 判成还没收工时最多等多久；超时仍会发一条，标题写「等待中」 |
 
 ---
 
@@ -281,6 +291,8 @@ token:    (已设置)
 | 命令 | 作用 |
 |---|---|
 | `codex-notify.exe '<JSON>'` | 由 Codex 调用，正常路径 |
+| `--agy` | 由 Antigravity 的 Stop 钩子调用（stdin 进、stdout 出） |
+| `--init-agy` | 把 Stop 钩子写进 `~/.gemini/config/hooks.json` |
 | `--tray` | 常驻托盘；双击 exe 不带参数也会进托盘。右键可看状态 / 发测试 / 改设置 / 管 NapCat（仅 Windows） |
 | `--test` | 用一条假事件真发一条，验证整条链路 |
 | `--set key=value` | 改一项配置并写回（`--set show_limits=false`），和托盘设置菜单同一条路径 |
@@ -323,6 +335,7 @@ D:\tools\codex-notify\codex-notify.exe --tray
 |---|---|---|
 | 启用通知 | `enabled` | 总开关，关掉后钩子静默退出 |
 | 只通知主 Agent | `only_main_agent` | 子 Agent / 内部审查回合完成时不再推送 |
+| 忽略内部辅助回合 | `ignore_internal_turns` | 生成建议 / 标题 / 子 Agent 通信这类结构化输出不再推送 |
 | 显示额度 | `show_limits` | 关掉后消息里只剩时间和摘要 |
 | 显示重置时间 | `show_reset` | 例如 `（22:11 重置）` |
 | 额度显示为「剩余」 | `limit_style` | 关＝已用 6%，开＝剩余 94% |
@@ -405,6 +418,80 @@ codex-notify.exe --classify 33333333-3333-4333-8333-333333333333
 
 钩子每次运行还会在 `notify.log` 里留一行 `thread <id> → 主 Agent / 无法判定`，从事件 JSON 里复制 `thread-id` 就能用 `--classify` 复查。
 
+还有一类**内部辅助回合**：生成后续建议、会话标题、子 Agent 通信等，输出 `{"suggestions":…}` / `{"exclude":[]}` 这类结构化 JSON，也会触发 notify，但主任务根本没结束。它们的 thread 是临时的，既没有 rollout 文件也没有会话名，所以 `only_main_agent` 查不到来源、按设计会放行。`ignore_internal_turns = true`（默认）补上这一条：只有「回复是合法 JSON **且** 该 thread 三无」才跳过，正常会话里用户要的 JSON 回答照常通知。
+
+---
+
+## Antigravity（agy）
+
+Antigravity 没有 `notify` 配置，但它有**官方 [Hooks](https://antigravity.google/docs/hooks)**。`Stop` 事件在**执行循环终止**时触发 —— 注意它不等于「任务完成」：Antigravity 的循环会自己接着跑下一轮，同一个任务能触发好几次。
+
+契约和 Codex 正好相反：事件从 **stdin** 进来，程序必须在 **stdout** 回一个 `{"decision":"stop"}`。不回或者格式不对，它不知道要不要继续跑。所以这是单独一个入口：
+
+```bash
+codex-notify.exe --agy        # stdin 进、stdout 出
+```
+
+### 装法
+
+```bash
+codex-notify.exe --init-agy
+```
+
+会往 `~/.gemini/config/hooks.json` 写一个 `codex-notify` 键 —— 只加这一个键，别的钩子原样保留：
+
+```json
+{
+  "codex-notify": {
+    "Stop": [
+      { "type": "command", "command": "\"D:/tools/codex-notify/codex-notify.exe\" --agy", "timeout": 15 }
+    ]
+  }
+}
+```
+
+App / IDE / CLI 三者共用这个全局文件。装完**重启 Antigravity 或重开会话**才生效。不想用命令就手工加，格式同上。
+
+> 路径写在 JSON 里用**正斜杠**。反斜杠要么转义成 `\\`，要么被 JSON 吞掉，正斜杠在 Windows 上照样能执行。
+
+### 消息里有什么
+
+| 内容 | 从哪来 |
+|---|---|
+| 项目名 | payload 的 `workspacePaths[0]` |
+| 摘要 | **会话标题**，读 `~/.gemini/antigravity/annotations/<conversationId>.pbtxt` |
+| 模型 | payload 的 `modelName`（如 `gemini-3.6-flash-medium`） |
+| 结束方式 | 完成 / 中止（达到步数上限）/ 出错 |
+| 出错原因 | `terminationReason = ERROR` 时带上 `error` 字段 |
+
+**额度显示不了。** Antigravity 的配额在服务端，本地没有快照，`show_limits` 对它无效。
+
+摘要口径在 `[agy].summary_source` 里选：`title`（默认，会话标题）/ `input`（你这轮最后一句输入）/ `message`（它最后一条回复）/ `none`。
+
+### 怎么算「真的干完了」
+
+这是 Antigravity 这边最容易踩的坑。`Stop` 触发得比想象中频繁 —— 实测同一个会话几分钟里触发了 7 次，其中大部分并不是任务结束：
+
+- 工具刚返回结果、模型还没开始想下一步，最后一条记录是 `GENERIC`；
+- 模型说了句「已启动脚本，正在等后台计算」，然后停下等结果；
+- 后台命令结束的系统消息刚进来（`SYSTEM_MESSAGE`），模型马上要接着处理。
+
+只看 `terminationReason` 分不出来 —— 这些全都是 `NO_TOOL_CALL`。所以默认（`only_when_finished = true`）会先压住这次通知，等它真安静下来再发：
+
+1. **看 `fullyIdle`**：`false` 说明后台命令还在跑，肯定没完。
+2. **看会话日志的尾巴**：最后一条必须是「模型把话说完、没跟任何工具调用」的记录。`GENERIC`（工具输出）、`SYSTEM_MESSAGE`、带 `tool_calls` 的回复，都算还没完。
+3. **等它安静**：托盘每 15 秒复查一次，日志 15 秒没再更新、且尾巴对得上，才发。同一个会话后来的 `Stop` 会顶掉前一次的挂起，不会连发。
+
+托盘没在跑的时候没人复查，这时会**照常发**（措辞换成「等待中」），宁可多一条也不漏。超过 `wait_seconds`（默认 15 分钟）还在动，也会发一条标注「长时间没有收尾，后台可能仍在运行」。
+
+### 调试
+
+```bash
+echo '{"conversationId":"...","workspacePaths":["D:/repo/demo"],"modelName":"gemini-3.6-flash-medium","terminationReason":"NO_TOOL_CALL","fullyIdle":true,"transcriptPath":"C:/Users/你/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl"}' | codex-notify.exe --agy --dry-run
+```
+
+`--agy` 的 stdout 被 decision 占着，所以预览和报错都走 **stderr**，日志照旧写 `notify.log`。预演也会打印判定结果（`判定 Busy(...)` / `判定 Done`），不放心可以先这么验一遍。
+
 ---
 
 ## 常见问题
@@ -430,7 +517,8 @@ codex-notify.exe --classify 33333333-3333-4333-8333-333333333333
 - 在 Windows 上开发和验证，代码本身是跨平台的，但其他平台未测试。
 - 依赖 NapCat 常驻。NapCat 退出、掉线，或者 QQ 自动更新导致注入失效，通知都会中断（`--check` 能看出来）。
 - NapCat 是第三方对 QQ 客户端的协议实现，属于灰色地带，账号有被风控的可能。请自行评估，建议用小号。
-- `only_main_agent` 和 `summary_source = "thread"` 依赖 Codex 的本地内部文件（会话日志 `thread_source`、`session_index.jsonl`），都未写进官方文档。字段或路径变了会自动退回旧行为（全部照常通知 / 显示最后一条回复），不会漏推，此时升级本程序即可。
+- `only_main_agent`、`ignore_internal_turns` 和 `summary_source = "thread"` 依赖 Codex 的本地内部文件（会话日志 `thread_source`、`session_index.jsonl`），都未写进官方文档。字段或路径变了会自动退回旧行为（照常通知 / 显示最后一条回复），不会漏推，此时升级本程序即可。
+- Antigravity 的 `--agy` 依赖它 Hooks 的 payload 结构（camelCase 那套字段）和 `annotations/<id>.pbtxt` 的位置，同样属于内部实现。变了会退化成「只有时间 + 项目名」，仍然会通知，不会把 decision 弄丢。
 
 ---
 
