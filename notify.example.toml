@@ -106,3 +106,8 @@ notify_error = true
 notify_aborted = false
 #   「还没收工」「长时间没结尾」这类占位通知
 notify_pending = false
+# 消息里带不带额度（5h 剩 92% · 周 剩 41%）。
+# Antigravity 的配额只在服务端，要读它的登录态去问一次 Google；
+# 没登录、网络不通、接口变了都会自动跳过这一段，不影响通知。
+# 显示成「已用」还是「剩余」跟随顶层的 limit_style。
+show_limits = true

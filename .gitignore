@@ -16,6 +16,9 @@
 # 仓库里提供的是 notify.example.toml，首次使用跑一次 --init 或手工复制。
 /notify.toml
 
+# Antigravity 额度的本地缓存（60 秒有效），运行时数据
+/agy-quota.json
+
 # 个人工作记录（对话备忘、调试笔记），不属于项目代码
 /.workbuddy/
 

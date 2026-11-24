@@ -64,6 +64,7 @@ const ID_TOGGLE_MAIN_ONLY: usize = 18;
 const ID_CYCLE_SUMMARY: usize = 19;
 const ID_CYCLE_SHELL: usize = 20;
 const ID_TOGGLE_INTERNAL: usize = 21;
+const ID_TOGGLE_AGY_LIMITS: usize = 22;
 
 /// 摘要长度的档位。菜单没法输数字，用「点一下换下一档」代替输入框。
 /// 260 是默认档；80 适合只想瞄一眼，600 基本是全文。
@@ -509,6 +510,16 @@ unsafe fn show_menu(hwnd: HWND) {
             AppendMenuW(sub, flags, id, w.as_ptr());
         }
 
+        // Antigravity 的额度和 Codex 用的不是同一套通道（要读
+        // 它的登录态去问 Google），所以单独一项，别和上面的「显示额度」混了
+        let agy_limits_w = wide("Antigravity 显示额度");
+        let flags = if cfg_now.agy_config().show_limits {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(sub, flags, ID_TOGGLE_AGY_LIMITS, agy_limits_w.as_ptr());
+
         // 摘要内容三档循环，标签里带当前档位
         let summary_label = match cfg_now.summary_source.trim().to_ascii_lowercase().as_str() {
             "message" => "摘要内容：最后一条回复",
@@ -593,6 +604,7 @@ unsafe fn show_menu(hwnd: HWND) {
         ID_TOGGLE_REMAINING => toggle_limit_style(),
         ID_TOGGLE_ENABLED => toggle_bool("enabled", cfg_now.enabled),
         ID_TOGGLE_MAIN_ONLY => toggle_bool("only_main_agent", cfg_now.only_main_agent),
+        ID_TOGGLE_AGY_LIMITS => toggle_bool("agy.show_limits", cfg_now.agy_config().show_limits),
         ID_TOGGLE_INTERNAL => {
             toggle_bool("ignore_internal_turns", cfg_now.ignore_internal_turns)
         }
@@ -641,6 +653,10 @@ fn toggle_bool(key: &str, current: bool) {
             // 否则「勾了但文件里没有 [napcat] 段」会静默丢失
             "napcat.kill_on_exit" => {
                 c.napcat.get_or_insert_with(Default::default).kill_on_exit = new;
+            }
+            // 同理：配置里没有 [agy] 段时先建一份默认的再改
+            "agy.show_limits" => {
+                c.agy.get_or_insert_with(Default::default).show_limits = new;
             }
             _ => {}
         }

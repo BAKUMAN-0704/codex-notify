@@ -56,6 +56,7 @@ mod limits;
 mod logfile;
 mod message;
 mod qq;
+mod quota_agy;
 mod text;
 
 #[cfg(windows)]

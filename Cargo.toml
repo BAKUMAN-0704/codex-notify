@@ -1,6 +1,6 @@
 [package]
 name = "codex-notify"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 description = "Codex 的 notify 钩子：回合结束时把结果推到 QQ"
 
@@ -33,6 +33,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",  # OpenProcess
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    # 查 Antigravity 额度：用系统的 WinHTTP 走 HTTPS，
+    # 避免为了一个 GET 把 rustls/ring 整坨依赖拖进来
+    "Win32_Networking_WinHttp",
+    # 从 Windows 凭据管理器读 Antigravity 的登录态
+    "Win32_Security_Credentials",
 ] }
 
 [build-dependencies]

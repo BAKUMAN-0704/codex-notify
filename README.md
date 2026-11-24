@@ -287,6 +287,7 @@ token:    (已设置)
 | `[agy].notify_error` | `true` | 任务出错发不发（出错是终态，不受收工筛选影响） |
 | `[agy].notify_aborted` | `false` | 到达步数上限而中止发不发 |
 | `[agy].notify_pending` | `false` | 「还没收工」「长时间没结尾」这类占位通知发不发 |
+| `[agy].show_limits` | `true` | 消息里带不带额度。查不到时这一段自动省略，不影响发送 |
 
 ---
 
@@ -467,8 +468,11 @@ App / IDE / CLI 三者共用这个全局文件。装完**重启 Antigravity 或�
 | 模型 | payload 的 `modelName`（如 `gemini-3.6-flash-medium`） |
 | 结束方式 | 完成 / 中止（达到步数上限）/ 出错 |
 | 出错原因 | `terminationReason = ERROR` 时带上 `error` 字段 |
+| 额度 | 拿 Antigravity 的登录态现查，`5h 剩 92% · 周 剩 41%` |
 
-**额度显示不了。** Antigravity 的配额在服务端，本地没有快照，`show_limits` 对它无效。
+**额度和 Codex 不是一个来路。** Codex 把 rate limit 写进会话日志，读文件就行；Antigravity 的配额只在服务端，本地没有快照。所以这里换了个办法：登录态存在 Windows 凭据管理器（`gemini:antigravity`），取出里面的 access token 调一次 `retrieveUserQuotaSummary`，拿到的就是界面上那两条。
+
+这条路是内部实现，有三处会变：凭据名、接口地址、以及**服务端校验 `User-Agent: antigravity`**（换成别的标识会直接 403「没有许可」）。任何一环失效，这一段自动省略——通知照发，只是少一行字。
 
 摘要口径在 `[agy].summary_source` 里选：`title`（默认，会话标题）/ `input`（你这轮最后一句输入）/ `message`（它最后一条回复）/ `none`。
 

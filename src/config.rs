@@ -165,6 +165,13 @@ pub struct Agy {
     /// 或者复查等到超时。补发「真的干完了」的那条不受影响。
     #[serde(default)]
     pub notify_pending: bool,
+
+    /// 是否在消息里带上额度（`5h 剩 92% · 周 剩 41%`）。
+    ///
+    /// 额度不在本地，要读 Antigravity 的登录态去问 Google，
+    /// 所以存在查不到的可能 —— 查不到时这一段自动不显示。
+    #[serde(default = "yes")]
+    pub show_limits: bool,
 }
 
 impl Default for Agy {
@@ -180,6 +187,7 @@ impl Default for Agy {
             notify_error: true,
             notify_aborted: false,
             notify_pending: false,
+            show_limits: true,
         }
     }
 }
@@ -493,4 +501,7 @@ notify_error = true
 notify_aborted = false
 # 「还没收工」「长时间没结尾」这类占位通知
 notify_pending = false
+# 消息里带不带额度（5h 剩 92% · 周 剩 41%）。
+# 额度不在本地，要读 Antigravity 的登录态去问 Google，查不到时这一段自动省略
+show_limits = true
 "#;

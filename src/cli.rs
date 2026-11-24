@@ -151,6 +151,15 @@ pub fn check(cfg: &Config) {
         "agy 通知:  完成={} / 出错={} / 步数上限中止={} / 等待中={}",
         agy.notify_done, agy.notify_error, agy.notify_aborted, agy.notify_pending
     );
+    println!(
+        "agy 额度:  show_limits={} / 口径={}",
+        agy.show_limits,
+        if cfg.limit_style.eq_ignore_ascii_case("remaining") {
+            "剩余"
+        } else {
+            "已用"
+        }
+    );
     println!();
 
     println!("== QQ（走本机 NapCat）==");

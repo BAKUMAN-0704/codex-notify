@@ -238,6 +238,18 @@ fn compose_agy_inner(
         meta.push_str(" · 后台仍在运行");
     }
 
+    // 额度：Antigravity 的配额只在服务端，得拿它的登录态去问一次。
+    // 查不到（没登录、网络不通、接口变了）就整段省略 —— 这行是锦上添花，
+    // 不能因为它让通知变慢或者发不出去。出错时也不加：
+    // 那种消息的重点是「为什么挂的」。
+    if agy.show_limits && !ev.is_error() {
+        let show_remaining = cfg.limit_style.eq_ignore_ascii_case("remaining");
+        if let Some(seg) = crate::quota_agy::segment(show_remaining) {
+            meta.push_str(" · ");
+            meta.push_str(&seg);
+        }
+    }
+
     let mut body = format!("{meta}\n");
 
     // ---- 摘要 ----
